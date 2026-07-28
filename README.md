@@ -1,6 +1,4 @@
-# README.md
-
-Stress_test_drone_city
+# Stress_test_drone_city
 
 Этот проект представляет собой структуру для тестирования дронов с использованием ИИ-агентов и ROS 2.
 
