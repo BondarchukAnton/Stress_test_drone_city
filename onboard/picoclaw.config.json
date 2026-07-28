@@ -1,0 +1,42 @@
+{
+  "_comment": "Skeleton ~/.picoclaw/config.json for a drone. Pin PicoClaw to the verified Sipeed commit/tag (v0.2.9) per brief §11; do NOT pull 'latest'. API keys go in .security.yml, never here.",
+
+  "agents": {
+    "default": {
+      "model": "sverk/qwen35",
+      "system_prompt_file": "/app/SOUL.md",
+      "tools": ["photograph", "detect_obstacle", "navigate", "get_pose"]
+    }
+  },
+
+  "model_list": [
+    {
+      "model_name": "sverk/qwen35",
+      "litellm_params": {
+        "model": "openai/qwen35",
+        "api_base": "https://ai.sverk.tech/v1",
+        "api_key": "os.environ/SVERK_API_KEY"
+      }
+    },
+    {
+      "_comment": "on-board local fallback (4GB Pi, offline): a tiny quantized model via Ollama",
+      "model_name": "local/qwen",
+      "litellm_params": {
+        "model": "ollama/qwen2.5:3b",
+        "api_base": "http://localhost:11434"
+      }
+    }
+  ],
+
+  "tools": {
+    "mcp": {
+      "servers": {
+        "bridge": {
+          "command": "python",
+          "args": ["/app/drone/picoclaw_bridge_mcp.py"],
+          "env": { "BRIDGE_URL": "http://localhost:9000" }
+        }
+      }
+    }
+  }
+}

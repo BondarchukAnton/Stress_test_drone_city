@@ -1,0 +1,99 @@
+# Деплой openclaw-ноды на ФЛОТ реальных дронов. Ansible здесь — транспорт:
+# вся логика запуска (kill старого бриджа, env лётного рецепта, healthz) живёт
+# в scripts/_drone_bridge_launch.sh — тот же файл, что и в однодронном
+# scripts/deploy_drone.sh, так что поведение борта одинаково при любом способе
+# деплоя.
+#
+#   ansible-playbook -i deploy/ansible/inventory.yml deploy/ansible/deploy.yml
+#   ansible-playbook ... -l drone-1        # только один борт
+#   make deploy-fleet                      # то же самое
+---
+- name: Deploy openclaw bridge node to the drone fleet
+  hosts: drones
+  gather_facts: false
+  vars:
+    repo_root: "{{ playbook_dir }}/../.."
+    in_container: "{{ sverk_container | default('') | length > 0 }}"
+
+  tasks:
+    - name: Node dir on the bort
+      ansible.builtin.file:
+        path: "{{ node_dir }}"
+        state: directory
+        mode: "0755"
+
+    - name: Upload bridge node files
+      ansible.builtin.copy:
+        src: "{{ repo_root }}/bridge/{{ item }}"
+        dest: "{{ node_dir }}/{{ item }}"
+        mode: "0644"
+      loop: "{{ node_files }}"
+
+    - name: Upload aruco markers map + launch script
+      ansible.builtin.copy:
+        src: "{{ repo_root }}/{{ item.src }}"
+        dest: "{{ node_dir }}/{{ item.dest }}"
+        mode: "{{ item.mode }}"
+      loop:
+        - { src: "{{ markers_file }}", dest: "markers.txt", mode: "0644" }
+        - { src: "scripts/_drone_bridge_launch.sh", dest: "_drone_bridge_launch.sh", mode: "0755" }
+
+    # --- способ Б: ssh на хост-компаньон, нода живёт в docker-контейнере ------
+    - name: Copy node into the sverk container (host mode)
+      ansible.builtin.command:
+        argv: [docker, cp, "{{ node_dir }}/{{ item }}", "{{ sverk_container }}:/tmp/{{ item }}"]
+      loop: "{{ node_files + ['markers.txt', '_drone_bridge_launch.sh'] }}"
+      when: in_container
+      changed_when: true
+
+    - name: (Re)start bridge inside the container (host mode)
+      ansible.builtin.command:
+        argv: [docker, exec,
+               -e, "FLIGHT_BACKEND={{ flight_backend }}",
+               -e, "SVERK_FRAME={{ sverk_frame }}",
+               -e, "TAKEOFF_FRAME={{ takeoff_frame }}",
+               -e, "OFFBOARD_NS={{ offboard_ns }}",
+               -e, "INSTANCE={{ instance }}",
+               -e, "PORT={{ bridge_port }}",
+               -e, "TAKEOFF_Z={{ takeoff_z }}",
+               -e, "CELL_SIZE={{ cell_size }}",
+               -e, "FIELD_ORIGIN={{ field_origin }}",
+               -e, "NODE_DIR=/tmp",
+               "{{ sverk_container }}", bash, /tmp/_drone_bridge_launch.sh]
+      register: launch_container
+      when: in_container
+      changed_when: true
+
+    # --- способ А: ssh уже внутри sverk-контейнера ---------------------------
+    - name: (Re)start bridge (direct container ssh)
+      ansible.builtin.command:
+        argv: [bash, "{{ node_dir }}/_drone_bridge_launch.sh"]
+      environment:
+        FLIGHT_BACKEND: "{{ flight_backend }}"
+        SVERK_FRAME: "{{ sverk_frame }}"
+        TAKEOFF_FRAME: "{{ takeoff_frame }}"
+        OFFBOARD_NS: "{{ offboard_ns }}"
+        INSTANCE: "{{ instance }}"
+        PORT: "{{ bridge_port }}"
+        TAKEOFF_Z: "{{ takeoff_z }}"
+        CELL_SIZE: "{{ cell_size }}"
+        FIELD_ORIGIN: "{{ field_origin }}"
+        NODE_DIR: "{{ node_dir }}"
+      register: launch_direct
+      when: not in_container
+      changed_when: true
+
+    - name: Tell the bort which cell it stands on
+      ansible.builtin.uri:
+        url: "http://localhost:{{ bridge_port }}/set_cell"
+        method: POST
+        body_format: json
+        body: { cell: "{{ start_cell.split(',') | map('int') | list }}" }
+      register: set_cell
+      retries: 3
+      delay: 2
+      until: set_cell.status == 200
+
+    - name: Bridge verdict
+      ansible.builtin.debug:
+        msg: "{{ (launch_container if in_container else launch_direct).stdout_lines | last }}"

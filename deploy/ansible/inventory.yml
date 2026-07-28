@@ -1,0 +1,33 @@
+# Флот реальных дронов для деплоя openclaw-ноды (см. deploy/ansible/README.md).
+#
+# Два способа достучаться до sverk ROS2 окружения борта:
+#   А) ssh ПРЯМО в контейнер sverk (у него свой sshd, обычно :22) — просто и
+#      быстро; sverk_container оставить "".
+#   Б) ssh на хост-компаньон (Orange Pi, обычно :2222) — файлы докидываются в
+#      контейнер через docker cp; указать sverk_container: <имя контейнера>.
+#
+# Пароли здесь — для полевого стенда. Для боевого флота: ssh-ключи или
+# ansible-vault (ansible-vault encrypt_string 'пароль' --name ansible_ssh_pass).
+all:
+  children:
+    drones:
+      hosts:
+        drone-1:
+          ansible_host: 192.168.1.109
+          ansible_port: 22            # способ А: sshd контейнера sverk
+          ansible_user: sverk
+          ansible_ssh_pass: sverk
+          instance: 0
+          # ВАЖНО: порт должен быть ПРОБРОШЕН из контейнера дрона наружу —
+          # 9001 у sverk_ros2 не опубликован, 7777 уже проброшен и свободен
+          bridge_port: 7777
+          start_cell: "1,1"           # клетка, над которой стоит борт (id4 = центр)
+        # drone-2:
+        #   ansible_host: 192.168.2.12
+        #   ansible_port: 2222        # способ Б: хост Orange Pi
+        #   ansible_user: orangepi
+        #   ansible_ssh_pass: orangepi
+        #   sverk_container: sverk    # имя ROS2-контейнера на борту
+        #   instance: 0
+        #   bridge_port: 9001
+        #   start_cell: "0,0"

@@ -1,7 +1,0 @@
-# group_vars/all.yml
-
-all:
-  hosts:
-    raspberry_pi:
-      ansible_host: 192.168.1.100
-      ansible_user: pi

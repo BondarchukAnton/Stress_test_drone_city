@@ -1,0 +1,24 @@
+# Общий профиль флота: одинаков для всех бортов команды, per-drone отличия
+# (instance, start_cell, адреса) — в inventory.yml.
+node_dir: /tmp/openclaw
+node_files:
+  - real_bridge.py
+  - sverk_flight.py
+  - fleet_flight.py
+  - mock.py
+  - aruco_cell.py
+markers_file: test_fixtures/test-3x3/markers.txt   # реальная разметка мата
+
+# лётный рецепт: взлёт по body (маркеры с земли не видны), полёт в aruco_map
+flight_backend: sverk
+sverk_frame: aruco_map
+takeoff_frame: body
+offboard_ns: ""            # сервисы реального борта в корне: /navigate
+takeoff_z: "1.0"           # метры (map/ENU)
+cell_size: "0.6"
+field_origin: "-0.6"
+
+sverk_container: ""        # "" = ssh уже внутри контейнера (способ А)
+
+# полевой стенд: не спотыкаться о смену host key при переустановках бортов
+ansible_ssh_common_args: "-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null"
