@@ -1,2 +1,20 @@
-# Ignore all .aider* files and directories
-.aider*
+# Ignore VSCode files
+.vscode/
+
+# Ignore Python cache files
+__pycache__/
+*.pyc
+
+# Ignore build and distribution files
+build/
+dist/
+*.egg-info/
+
+# Ignore log files
+*.log
+
+# Ignore temporary files
+*.tmp
+
+# Ignore aider input history
+.aider.input.history
