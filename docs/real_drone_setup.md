@@ -1,68 +1,52 @@
-# On-drone & PicoClaw
+# На дроне и PicoClaw
 
-A drone/rover is just one more node. Two ways to run the brain on it, sharing the
-exact same robot interface (the [bridge](bridge.md) contract) and the same
-[hub](distributed.md). Files live in `drone/`.
+Дрон или ровер является просто еще одним узлом. Два способа запустить мозг на нем, используя одинаковый интерфейс робота (контракт [bridge](bridge.md)) и одинаковую [хаб](distributed.md). Файлы находятся в `drone/`.
 
-> **2026-07:** унифицированный образ на разные дроны, `HANDLER_ID`/`FLEET`
+> **2026-07:** унифицированный образ для разных дронов, `HANDLER_ID`/`FLEET`
 > (несколько команд в одной сети), привязка в постоянную память Raspberry,
 > LED-регистрация на `/fleet` и единая ROS2 bridge-нода (city|painter) поверх
 > sverk-ros2 — подробности в [fleet.md](fleet.md); профиль проекта —
 > `.env.drone.example`.
 
-## The adaptable drone image (`openclaw-drone`)
+## Адаптивный образ дрона (`openclaw-drone`)
 
-One image (`drone/Dockerfile`, multi-arch incl. `linux/arm64` for Pi 4/5) runs
-any node in either scenario. Its entrypoint (`drone/entrypoint.sh`) reads the
-node's identity from env and adapts:
+Один образ (`drone/Dockerfile`, многоплатформенный, включая `linux/arm64` для Pi 4/5) может запускать любой узел в любом сценарии. Его входной точка (`drone/entrypoint.sh`) читает идентификатор узла из переменных окружения и адаптирует его:
 
 - `AGENT_ID` / `ROLE` (`scout` | `rover` | `painter`) / `TASK` (`safe_passage`
-  | `painting`, inferred from the role if unset) select the behaviour.
-- It picks a **bundled SOUL** (`souls/<AGENT_ID>.md`) if present, otherwise
-  **generates one** so an arbitrary name like `painter-7` or `drone-9` just
-  works. For painters the generated persona's colour + technique are derived
-  from the id and overridable with `DRONE_COLOR` / `DRONE_TECHNIQUE` /
+  | `painting`, определяется автоматически, если не задано) выбирают поведение.
+- Он выбирает **встроенную SOUL** (`souls/<AGENT_ID>.md`) при наличии, в противном случае
+  **генерирует одну**, чтобы произвольное имя, например `painter-7` или `drone-9`, просто работало. Для пейнтров генерируемый персонаж цвет и техника определяются из ID и могут быть переопределены с помощью переменных окружения `DRONE_COLOR` / `DRONE_TECHNIQUE` /
   `DRONE_NAME` / `DRONE_SUBJECT`.
-- `BRAIN=wrapper` (default) runs the Python §7-loop; `BRAIN=picoclaw` runs the
-  native binary if baked in (see B), else falls back to the wrapper.
+- `BRAIN=wrapper` (по умолчанию) запускает Python §7-loop; `BRAIN=picoclaw` запускает
+  нативный бинарный файл, если он встроен (см. B), иначе падает на оболочку.
 
 ```bash
-# scale a painters swarm: each Pi is one spray-can drone, no file edits
+# масштабирование флота пейнтров: каждый Pi является одним дроном-распылителем, без изменений файлов
 make drone AGENT_ID=painter-5 ROLE=painter TASK=painting HUB_URL=http://<hub>:8080 HUB_TOKEN=<t>
 make drone AGENT_ID=painter-6 ROLE=painter TASK=painting HUB_URL=http://<hub>:8080 HUB_TOKEN=<t>
-# or smart-rover scouts:
+# или умные роутеры-разведчики:
 make drone AGENT_ID=drone-5 ROLE=scout HUB_URL=http://<hub>:8080 HUB_TOKEN=<t>
 ```
 
-`DUMP_SOUL=1` makes the entrypoint print the resolved SOUL + env and exit —
-handy for verifying a node's identity before it joins.
+`DUMP_SOUL=1` заставляет входную точку распечатать разрешенную SOUL и переменные окружения, а затем выйти — полезно для проверки идентичности узла перед его присоединением.
 
-## A. The Python agent-loop wrapper (what runs today)
+## А. Оболочка Python для агента-цикла (что запускается сегодня)
 
-This is `agent/loop.py` with `MODEL_PROVIDER=sverk` (or a local model). It's the
-"thin wrapper of the spec §7 loop" the brief describes, with a pluggable brain.
-Deploy with `docker-compose.drone.yml` (`make drone ...`). Verified end-to-end.
+Это `agent/loop.py` с `MODEL_PROVIDER=sverk` (или локальным моделем). Это "тонкий обертка вокруг цикла §7" краткого описания, с плагинируемым мозгом. Развертывайте с помощью `docker-compose.drone.yml` (`make drone ...`). Проверено на конечном этапе.
 
-## B. Native PicoClaw as the brain (drop-in)
+## Б. Нативный PicoClaw как мозг (встроенное решение)
 
-PicoClaw (Go, pin **v0.2.9**) adds tools declaratively via **MCP servers spawned
-as child processes — no Go recompile** (verified against sipeed/picoclaw). So
-PicoClaw runs the agent and reaches the robot through one generic MCP tool server
-that proxies to the same bridge HTTP contract.
+PicoClaw (Go, пин **v0.2.9**) добавляет инструменты декларативно через **MCP серверы, запущенные как дочерние процессы — без перекомпиляции Go** (проверено на sipeed/picoclaw). Таким образом, PicoClaw запускает агента и достигает робота через один универсальный сервер MCP-инструментов, который проксирует к тому же HTTP-контракту моста.
 
-* **`drone/picoclaw_bridge_mcp.py`** — the `call_bridge` shim: flight tools
-  (`fly_to`, `photograph_cell`, `analyze`, `takeoff`, `land`, `get_pose`, …)
-  proxying to `BRIDGE_URL`, plus **board tools** (`read_board`, `post_message`,
-  `report_progress`, `emit_thought`) proxying to `HUB_URL` with `HUB_TOKEN` —
-  so a PicoClaw brain joins the multi-agent chat like any wrapper agent (the
-  dashboard cannot tell them apart). No shell/file escape (§11). Stdio JSON-RPC
-  2.0 (initialize / tools/list / tools/call). Tested end-to-end without Go:
-  `tests/test_picoclaw_shim.py`; protocol prompt: `souls/picoclaw-pilot.md`;
-  when to pick which interop — [agent-interop.md](agent-interop.md).
-* **`drone/picoclaw.config.json`** — skeleton `~/.picoclaw/config.json`:
-  `model_list` points at the shared `sverk/qwen35` gateway (keys in
-  `.security.yml`, never in config), with an on-board Ollama fallback;
-  `tools.mcp.servers.bridge` launches the shim.
+* **`drone/picoclaw_bridge_mcp.py`** — шим `call_bridge`: инструменты полета (`fly_to`, `photograph_cell`, `analyze`, `takeoff`, `land`, `get_pose`, …)
+  проксируют к `BRIDGE_URL`, а также **инструменты платформы** (`read_board`, `post_message`,
+  `report_progress`, `emit_thought`) проксируют к `HUB_URL` с использованием `HUB_TOKEN` — так что PicoClaw-агент может присоединяться к многомодульному чату, как любой оболочковый агент (панель управления не сможет их отличить). Без возможности shell/file escape (§11). Стандартный JSON-RPC 2.0 (инициализация / tools/list / tools/call). Проверено на конечном этапе без Go:
+  `tests/test_picoclaw_shim.py`; протокол запроса: `souls/picoclaw-pilot.md`;
+  когда выбрать какой-то интерфейс взаимодействия — [agent-interop.md](agent-interop.md).
+* **`drone/picoclaw.config.json`** — скелетный файл конфигурации `~/.picoclaw/config.json`:
+  `model_list` указывает на общий шлюз `sverk/qwen35` (ключи в
+  `.security.yml`, никогда не в config), с резервным фаллом Ollama;
+  `tools.mcp.servers.bridge` запускает шим.
 
 ```jsonc
 "model_list": [
@@ -75,51 +59,32 @@ that proxies to the same bridge HTTP contract.
   "env": { "BRIDGE_URL": "http://localhost:9000" } } } } }
 ```
 
-To stream PicoClaw's thinking to the central dashboard, have the wrapper (or a
-small sidecar) POST PicoClaw's per-step reasoning to the hub `POST /events` as
-`thought_start`/`thought_delta`/`thought_end` for that `AGENT_ID` — the same
-events the dashboard already renders and persists per agent. PicoClaw's streaming
-callback / verbose reasoning is the source.
+Чтобы транслировать мысли PicoClaw на центральную панель управления, пусть оболочка (или небольшой сопутствующий процесс) отправляет мысли PicoClaw за шаги в хаб `POST /events` как
+`thought_start`/`thought_delta`/`thought_end` для этого `AGENT_ID` — такие же события, которые панель управления уже отображает и сохраняет по агенту. Мысли PicoClaw транслируются через обратный вызов потока / подробное размышление.
 
-> **Caveat (not built/tested here):** no Go toolchain in this environment, and
-> this is your pinned PicoClaw version — the shim is a working **skeleton** to
-> adapt. Verify the MCP transport framing matches your build (the shim uses
-> newline-delimited JSON-RPC; switch to LSP-style Content-Length framing if your
-> build needs it). The bridge contract and the hub API don't change either way.
-> Pin the PicoClaw commit and check the binary into your image (§11).
+> **Внимание (не проверено здесь):** нет Go-инструментной цепочки в этом окружении, и это ваша фиксированная версия PicoClaw — шим является работоспособным **скелетом**, который можно адаптировать. Проверьте соответствие транспорта MCP с вашей сборкой (шифм использует
+> нововведение-разделённый JSON-RPC; переключитесь на стилизацию LSP Content-Length, если ваша сборка требует этого). Контракт моста и API хаба не изменяются ни в каком случае. Закрепите коммит PicoClaw и добавьте бинарный файл в образ (§11).
 
-## Models
+## Модели
 
-* **Default: shared server model** (`MODEL_PROVIDER=sverk`, `qwen35`). Every drone
-  calls it independently over the network. `qwen35` is a reasoning model — its
-  chain-of-thought is what the dashboard streams.
-* **On-board local model** (offline / no link): `MODEL_PROVIDER=ollama`,
-  `OLLAMA_BASE=http://host.docker.internal:11434`, a 1–3B Q4 model on 4 GB units
-  (expect quality/latency hits, brief §10). A 2–4 GB Pi can't run a useful LLM,
-  so remote is the default; local is the offline fallback. Either way the drone
-  streams its thoughts to the hub the same way.
+* **По умолчанию: общий серверная модель** (`MODEL_PROVIDER=sverk`, `qwen35`). Каждый дрон вызывает его независимо через сеть. `qwen35` — это модель для размышления — цепь мыслей, которую панель управления транслирует.
+* **Локальная модель на борту** (офлайн / без связи): `MODEL_PROVIDER=ollama`,
+  `OLLAMA_BASE=http://host.docker.internal:11434`, 1–3B Q4 модель на 4 ГБ единицах
+  (ожидайте снижения качества/времени обработки, краткое описание §10). 2–4 ГБ Pi не могут запустить полезную LLM,
+  поэтому удаленный вариант по умолчанию; локальный — откатный. В любом случае дрон транслирует свои мысли в хаб таким же образом.
 
-## Pi-5 / ROS2 (designed for, not built — brief §10)
+## Пи-5 / ROS2 (проектировано для, но не построено — краткое описание §10)
 
-* Per drone on a Pi-5: PicoClaw binary (or the Python wrapper) + the `rclpy`
-  bridge node (`bridge/ros2/bridge_node.py`, a stub today) + camera. Keep the §6
-  HTTP contract so nothing upstream changes.
-* ROS2: target a current LTS distro; the bridge is the only ROS2-aware component.
-  GPIO/sensors are extra bridge endpoints with the same HTTP-tool contract.
-* The shared-volume blackboard is dev-only; on separate machines it becomes the
-  hub's HTTP+SSE API ([distributed](distributed.md)).
+* На каждом дроне на Pi-5: бинарный файл PicoClaw (или оболочковый wrapper) + узел моста ROS2 (`bridge/ros2/bridge_node.py`, временный шаблон сегодня) + камера. Сохраняйте контракт HTTP для ничего не меняется вверху.
+* ROS2: целевой текущий LTS дистрибутив; мост — единственный компонент, осознанно работающий с ROS2. GPIO/сенсоры являются дополнительными конечными точками моста с тем же HTTP-контрактом инструментов.
+* Общее хранилище для чертежей является разработочным; на отдельных машинах он становится API HTTP+SSE хаба ([distributed](distributed.md)).
 
-## Networking & safety
+## Сетевые и безопасные аспекты
 
-Put all robots + the orchestrator on one private LAN/VPN; drones reach the hub at
-`HUB_URL`. Set a shared `HUB_TOKEN` so only your robots can post. On hardware the
-bridge gets a hard **e-stop** before `navigate` touches a physical rover, and the
-coordinator's `world.ready` certification stays the gate. See
-[security](security.md).
+Поместите всех роботов и координатора в одну закрытую сеть/VPN; дроны подключаются к хабу по адресу `HUB_URL`. Установите общий токен `HUB_TOKEN`, чтобы только ваши роботы могли отправлять сообщения. На оборудовании мост получает жесткий **э-стоп** перед тем, как `navigate` не затрагивает физический роутер, и верификация `world.ready` координатора остается в качестве шлюза. Подробности — [security](security.md).
 
-## Adding / removing drones
+## Добавление/удаление дронов
 
-Plug-and-play: bring a drone node up → it registers → the coordinator includes it
-next run. Stopping a node drops it from the registry on the next clean run.
-(Mapping an arbitrary number of drones onto sectors is the open TODO — see
+Подключите узел-дрон → он регистрируется → координатор включает его на следующем запуске. Остановка узла исключает его из реестра на следующем чистом запуске.
+(Сопоставление произвольного количества дронов с секторами является открытой задачей — см.
 [extending](extending.md).)
