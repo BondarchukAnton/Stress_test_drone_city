@@ -21,3 +21,4 @@ dist/
 
 # Ignore all .aider files
 .aider/*
+.aider*
