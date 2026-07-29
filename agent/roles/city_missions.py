@@ -1,13 +1,14 @@
 """city_missions agent behaviours (Город дронов): coordinator + scout + rover.
 
-Двухэтапный диалог агентов:
+Двухэтапный диалог агентов + движение ровера:
 
 Фазы:
   INIT           — coordinator читает map.json, переходит в CHAT_SCRIPT
   CHAT_SCRIPT    — агенты обсуждают observer.py vs seeker.py,
                    координатор фиксирует выбор
   EXECUTE_FLIGHT — координатор запускает выбранный скрипт облёта
-  CHAT_TARGET    — агенты обсуждают результаты VLM, выбирают 1 целевой квадрат
+  CHAT_TARGET    — агенты обсуждают результаты VLM, выбирают целевой квадрат
+  ROVER_EXECUTE  — координатор запускает ровер: старт → башня → огонь → старт
   DONE           — итоги на доске: target_cell + count
 """
 from __future__ import annotations
@@ -308,11 +309,10 @@ def coordinator_step(ctx) -> dict:
             verdict = _pick_target_from_chat(ctx)
             world_bb["target_cell"] = verdict["target_cell"]
             world_bb["target_count"] = verdict["count"]
-            world_bb["phase"] = "DONE"
-            world_bb["done"] = True
+            world_bb["phase"] = "ROVER_EXECUTE"
             ctx.bb.write_world(world_bb)
-            ctx.bb.write_phase("DONE", ctx.phase.get("round", 0))
-            ctx.emit({"kind": "phase", "phase": "DONE"})
+            ctx.bb.write_phase("ROVER_EXECUTE", ctx.phase.get("round", 0))
+            ctx.emit({"kind": "phase", "phase": "ROVER_EXECUTE"})
             ctx.emit({"kind": "target_chosen",
                       "target_cell": verdict["target_cell"],
                       "count": verdict["count"]})
@@ -335,6 +335,73 @@ def coordinator_step(ctx) -> dict:
             "thought": f"Идёт обсуждение цели: {len(_chat_phase(ctx, 'CHAT_TARGET'))} реплик, "
                        f"высказались {len(chatters)}/{len(scouts)}.",
             "messages": msgs_out, "idle": not msgs_out,
+        }
+
+    # ---- ROVER_EXECUTE: движение ровера ----
+    if phase == "ROVER_EXECUTE":
+        if world_bb.get("done"):
+            return {"thought": "Миссия выполнена.", "messages": [], "idle": True}
+
+        target = world_bb.get("target_cell")
+        target_count = world_bb.get("target_count", 1)
+        if not target:
+            world_bb["done"] = True
+            world_bb["phase"] = "DONE"
+            ctx.bb.write_world(world_bb)
+            ctx.bb.write_phase("DONE", ctx.phase.get("round", 0))
+            ctx.emit({"kind": "phase", "phase": "DONE"})
+            return {
+                "thought": "Нет цели — ровер не запускается.",
+                "messages": [
+                    make_msg(ctx, "REPORT", "all", "DONE",
+                             body="Цель не определена, ровер остаётся на месте.",
+                             payload={"target_cell": None})
+                ],
+                "idle": False,
+            }
+
+        water = list(ctx.scenario_map.get("water_tower") or [1, 3])
+        init = list(ctx.scenario_map.get("charge_zone") or [1, 1])
+
+        ctx.emit({"kind": "mission_phase", "phase": "rover",
+                  "target_cell": target, "count": target_count,
+                  "water_tower": water, "init_cell": init})
+
+        try:
+            from rover_executor import run_rover_mission
+
+            rover_api = os.environ.get("ROVER_API_URL", "")
+            rover_bridge = os.environ.get("ROVER_URL", "")
+
+            rover_result = run_rover_mission(
+                target_cell=target,
+                count=target_count,
+                water_cell=water,
+                init_cell=init,
+                rover_api_url=rover_api,
+                rover_bridge_url=rover_bridge,
+                emit=ctx.emit,
+            )
+        except Exception as e:
+            rover_result = {"status": "error", "error": str(e)}
+
+        world_bb["rover_result"] = rover_result
+        world_bb["done"] = True
+        world_bb["phase"] = "DONE"
+        ctx.bb.write_world(world_bb)
+        ctx.bb.write_phase("DONE", ctx.phase.get("round", 0))
+        ctx.emit({"kind": "phase", "phase": "DONE"})
+
+        ok = rover_result.get("status") == "completed"
+        body = (f"Ровер {'выполнил миссию' if ok else 'завершил с ошибкой'}. "
+                f"Огонь: {target}.")
+        return {
+            "thought": f"Ровер: {rover_result.get('status')}.",
+            "messages": [
+                make_msg(ctx, "REPORT", "all", "DONE", body=body,
+                         payload=rover_result)
+            ],
+            "idle": False,
         }
 
     return {"thought": "Готово.", "messages": [], "idle": True}
@@ -404,6 +471,10 @@ def scout_step(ctx) -> dict:
             "idle": False,
         }
 
+    if phase == "ROVER_EXECUTE":
+        return {"thought": "Ровер выполняет тушение.",
+                "messages": [], "idle": True}
+
     return {"thought": f"Жду фазу ({phase}).", "messages": [], "idle": True}
 
 
@@ -456,6 +527,10 @@ def rover_step(ctx) -> dict:
             ],
             "idle": False,
         }
+
+    if phase == "ROVER_EXECUTE":
+        return {"thought": "Выполняю маршрут тушения.",
+                "messages": [], "idle": True}
 
     return {"thought": f"Жду ({phase}).", "messages": [], "idle": True}
 
