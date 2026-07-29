@@ -55,7 +55,6 @@ def build_config() -> dict:
         # agent drives it through its bridge (real gz cube / hardware Nav2); else the
         # deterministic executor runs inline (mock/test).
         "real_rover": os.environ.get("CITY_REAL_ROVER", "0") not in ("0", "", "false", "no"),
-        "safety_drone": os.environ.get("SAFETY_DRONE", "safety-1"),
         "sectors": env_list("SECTORS", ["A", "B", "C", "D"]),
         "quadrants": env_list("QUADRANTS", ["Q1", "Q2", "Q3", "Q4"]),
         "zones": env_list("ZONES", ["Z1", "Z2", "Z3", "Z4"]),

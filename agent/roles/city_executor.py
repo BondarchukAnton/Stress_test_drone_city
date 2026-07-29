@@ -222,7 +222,7 @@ def run_attempt(world: WorldModel, observations: list | None = None) -> dict:
                 result["person_found"] = drone.found_person
                 if drone.found_person:
                     _ev(log, "PERSON_FOUND", cell=list(world.person.get("cell")),
-                        window=world.person.get("window"), agent_id="safety_drone")
+                        window=world.person.get("window"))
                 result["fire_ok"] = execute_fire(world, rover, log)
             elif mission == "delivery":
                 result["delivery_ok"] = execute_delivery(world, rover, drone, log)

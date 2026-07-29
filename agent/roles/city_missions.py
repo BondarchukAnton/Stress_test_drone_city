@@ -1,22 +1,14 @@
-"""city_missions agent behaviours (Город дронов): coordinator + scout + safety
-drone, on the shared phase machine / blackboard. The LLM proposes and explains;
-the deterministic core (city_world + city_executor) plans, checks and executes, so
-nothing unsafe reaches the robots.
+"""city_missions agent behaviours (Город дронов): coordinator + scout + rover,
+on the shared phase machine / blackboard.
 
-Phases (compact, reuses the repo's INIT→…→DONE machine):
-  INIT     coordinator builds the 6×6 WorldModel from the scenario map, splits the
-           field into scout zones, opens SURVEY.
-  SURVEY   scouts fly their zones and post structured OBSERVATIONs (fire+level,
-           delivery pickup/dropoff, person_in_window, water tower, charge zone);
-           the coordinator consolidates confirmed facts into the world.
-  EXECUTE  the coordinator ranks missions, compiles + energy-plans them, runs the
-           executor (rover + safety-drone escort in sim time) and emits the
-           ACTION_COMPLETED evidence trail. Delivery never routes through an
-           un-extinguished fire.
-  DONE     summary is on the board + journal.
-
-The real rover/safety_drone drive the SAME compiled actions through the bridge;
-here the executor is the reference/oracle so the whole thing is one testable unit.
+Phases:
+  INIT     coordinator reads map.json (grid, cell size, charge zone, water tower),
+           splits the field into scout zones, opens SURVEY.
+  SURVEY   scouts fly their zones, photograph cells, run VLM (brain.see) on the
+           host to detect fire. Coordinator consolidates confirmed fire facts.
+  EXECUTE  coordinator compiles the fire-extinguishing plan (rover drives to fire
+           via roads, dwells at water tower) and runs it.
+  DONE     summary on the board.
 """
 from __future__ import annotations
 
@@ -28,16 +20,12 @@ from .survey_common import cell_key, grid_size, zones_from_map
 
 
 def _survey_zones(scenario_map, labels):
-    """Zone assignment for the survey. Default = contiguous quadrants (efficient
-    flight paths). SURVEY_ROUNDROBIN=1 = each drone grabs SURVEY_CELLS_PER_TURN
-    cells IN TURN, round-robin across the whole field (scattered zones) — less
-    path-optimal but a far more dramatic 'all four sweep together' look."""
     if os.environ.get("SURVEY_ROUNDROBIN", "0") in ("0", "", "false", "no"):
         return zones_from_map(scenario_map, labels)
     per = max(1, int(os.environ.get("SURVEY_CELLS_PER_TURN", "2")))
     w, h = grid_size(scenario_map)
     cells = []
-    for cy in range(h):                       # snake order = a clean visual sweep
+    for cy in range(h):
         row = [[cx, cy] for cx in range(w)]
         if cy % 2:
             row.reverse()
@@ -51,15 +39,25 @@ from .city_world import (load_world, rank_missions, fire_route, delivery_route,
 from .city_executor import run_attempt, plan_total_energy
 
 
+# ---- VLM prompt for fire detection ----
+_VLM_FIRE_DEFAULT = (
+    "Ты — детектор пожара на дроне. Смотришь снимок клетки сверху.\n"
+    "Ответь ОДНИМ словом: FIRE (видишь пожар/дым/огонь/яркое пламя) "
+    "или CLEAR (чисто).\n"
+    "Пожар — это яркое свечение, дым, открытое пламя в клетке."
+)
+
+
+def _fire_prompt() -> str:
+    return os.environ.get("VLM_FIRE_PROMPT", _VLM_FIRE_DEFAULT)
+
+
 # ---- fact consolidation -----------------------------------------------------
 def _observations(ctx) -> list:
     return [m for m in ctx.messages if m.get("type") == "OBSERVATION"]
 
 
 def _confirmed(ctx, kind: str, min_votes: int = 1):
-    """Return the majority-voted detection of `kind` from scout OBSERVATIONs, or
-    None. Fire level = majority of the numbers read off the marker. min_votes=2
-    would demand an independent confirmation (regulation: спорные факты)."""
     votes: dict[str, list] = {}
     for m in _observations(ctx):
         for d in (m.get("payload") or {}).get("detections", []):
@@ -77,33 +75,24 @@ def _confirmed(ctx, kind: str, min_votes: int = 1):
     out = {"cell": cell, "confidence": max(d.get("confidence", 0) for d in dets),
            "confirmed_by": len(dets)}
     levels = [int(d["level"]) for d in dets if d.get("level") is not None]
-    if levels:                                   # median of the read fire levels
+    if levels:
         levels.sort()
         out["level"] = levels[len(levels) // 2]
     return out
 
 
 def _build_world(ctx):
-    """WorldModel from the scenario map, overlaid with consolidated observations."""
+    """WorldModel from the scenario map, overlaid with confirmed fire facts."""
     world = load_world(ctx.scenario_map)
     fire = _confirmed(ctx, "fire")
     if fire:
         world.fire = {"cell": fire["cell"], "level": fire.get("level", 1),
-                      "confidence": fire["confidence"], "confirmed_by": fire["confirmed_by"]}
-    person = _confirmed(ctx, "person_in_window")
-    if person:
-        world.person = {"cell": person["cell"], "confidence": person["confidence"]}
-    pickup = _confirmed(ctx, "delivery_pickup")
-    dropoff = _confirmed(ctx, "delivery_dropoff")
-    if pickup and dropoff:
-        world.delivery = {"pickup": pickup["cell"], "dropoff": dropoff["cell"]}
+                       "confidence": fire["confidence"], "confirmed_by": fire["confirmed_by"]}
     return world
 
 
 def _facts_ready(world) -> bool:
-    return bool(world.fire and world.fire.get("cell") is not None
-                and world.delivery and world.delivery.get("pickup") is not None
-                and world.delivery.get("dropoff") is not None)
+    return bool(world.fire and world.fire.get("cell") is not None)
 
 
 # ---- coordinator ------------------------------------------------------------
@@ -324,8 +313,7 @@ def _my_zone(ctx) -> list:
 
 
 def _detections_in(ctx, cells) -> list:
-    """Mock on-board VLM: report the scenario's ground-truth objects that fall in
-    the given cells as structured detections (fire+level / delivery / person)."""
+    """Mock: report fire from map.json ground truth."""
     keys = {cell_key(c) for c in cells}
     sm = ctx.scenario_map
     out = []
@@ -333,61 +321,111 @@ def _detections_in(ctx, cells) -> list:
     if isinstance(fire, dict) and cell_key(fire["cell"]) in keys:
         out.append({"type": "fire", "cell": fire["cell"],
                     "level": int(fire.get("level", 1)), "confidence": 0.93})
-    person = sm.get("person")
-    if isinstance(person, dict) and cell_key(person["cell"]) in keys:
-        out.append({"type": "person_in_window", "cell": person["cell"],
-                    "window": person.get("window"), "confidence": 0.74})
-    dv = sm.get("delivery") or {}
-    if dv.get("pickup") and cell_key(dv["pickup"]) in keys:
-        out.append({"type": "delivery_pickup", "cell": dv["pickup"], "confidence": 0.88})
-    if dv.get("dropoff") and cell_key(dv["dropoff"]) in keys:
-        out.append({"type": "delivery_dropoff", "cell": dv["dropoff"], "confidence": 0.88})
     return out
 
 
 def _fly_targets(ctx, zone) -> list:
-    """Cells the drone actually overflies: any mission-object cells in the zone
-    (fire/pickup/dropoff/person) FIRST, then a couple more, capped for speed +
-    resilience to a flaky leg (real MAVLink flight is ~10-20 s/cell)."""
+    """Cells the drone overflies: fire-object cells first, then extras."""
     keys_obj = set()
     sm = ctx.scenario_map
-    for o in [sm.get("fire"), sm.get("person")]:
-        if isinstance(o, dict) and o.get("cell"):
-            keys_obj.add(cell_key(o["cell"]))
-    for k in ("pickup", "dropoff"):
-        c = (sm.get("delivery") or {}).get(k)
-        if c:
-            keys_obj.add(cell_key(c))
+    fire = sm.get("fire")
+    if isinstance(fire, dict) and fire.get("cell"):
+        keys_obj.add(cell_key(fire["cell"]))
     prio = [c for c in zone if cell_key(c) in keys_obj]
     rest = [c for c in zone if cell_key(c) not in keys_obj]
     return (prio + rest)[:max(2, len(prio) + 2)]
 
 
-def _fly_zone(ctx, zone) -> list:
-    """REAL survey: fly the drone over the key zone cells, photograph, run the VLM.
-    Detections come from _detections_in (scene truth confirmed by overflight); a
-    VLM 'fire' at a cell corroborates the fire. Per-cell try/except so a flaky leg
-    never aborts the survey."""
-    flown, fire_seen = [], None
+def _vlm_detect_fire(ctx, cell) -> dict | None:
+    """Сфотографировать клетку через мост и проанализировать снимок через
+    VLM на хосте (ctx.brain.see → gemma4-vlm).
+
+    Возвращает детекцию fire или None. После анализа удаляет снимок."""
+    import re
+
+    result = ctx.bridge.photograph_cell(cell)
+    image_path = result.get("image_path", "")
+    if not image_path:
+        ctx.emit({"kind": "analyze", "from": ctx.agent_id, "cell": list(cell),
+                   "error": "no image_path from bridge"})
+        return None
+
+    # читаем PNG из общего тома blackboard (агент и мост в одном volume)
+    bb_root = os.environ.get("BLACKBOARD", "/blackboard")
+    full_path = os.path.join(bb_root, image_path)
+    try:
+        with open(full_path, "rb") as f:
+            image_png = f.read()
+    except (OSError, FileNotFoundError):
+        ctx.emit({"kind": "analyze", "from": ctx.agent_id, "cell": list(cell),
+                   "error": f"cannot read {image_path}"})
+        return None
+
+    if not image_png:
+        ctx.emit({"kind": "analyze", "from": ctx.agent_id, "cell": list(cell),
+                   "error": "empty image"})
+        _cleanup(full_path)
+        return None
+
+    # VLM на хосте: отправляем PNG + промпт → gemma4-vlm
+    system = _fire_prompt()
+    user = f"Клетка [{cell[0]},{cell[1]}]. Видишь пожар?"
+    try:
+        vlm_result = ctx.brain.see(system, user, image_png, max_tokens=50, log_context="fire_detect")
+    except Exception as e:
+        ctx.emit({"kind": "analyze", "from": ctx.agent_id, "cell": list(cell),
+                   "error": f"VLM error: {type(e).__name__}"})
+        _cleanup(full_path)
+        return None
+
+    # удаляем снимок — проанализирован, больше не нужен
+    _cleanup(full_path)
+
+    if not vlm_result:
+        ctx.emit({"kind": "analyze", "from": ctx.agent_id, "cell": list(cell),
+                   "fire": False, "confidence": 0, "label": "vlm_empty"})
+        return None
+
+    vlm_lower = vlm_result.lower().strip()
+    is_fire = bool(re.search(r"\bfire\b", vlm_lower))
+
+    ctx.emit({"kind": "analyze", "from": ctx.agent_id, "cell": list(cell),
+               "fire": is_fire, "confidence": 0.85 if is_fire else 0.9,
+               "label": vlm_result[:120]})
+
+    if is_fire:
+        level = 1
+        lvl_match = re.search(r"(?:уровень|level|lvl)[\s:]*(\d)", vlm_lower)
+        if lvl_match:
+            level = max(1, min(3, int(lvl_match.group(1))))
+        return {"type": "fire", "cell": list(cell), "level": level, "confidence": 0.85}
+    return None
+
+
+def _cleanup(filepath: str) -> None:
+    try:
+        os.remove(filepath)
+    except OSError:
+        pass
+
+
+def _fly_zone(ctx, zone):
+    """Реальный облёт зоны: лететь → фото → VLM на хосте → детекция пожара."""
+    flown, dets = [], []
     for cell in _fly_targets(ctx, zone):
         try:
             ctx.bridge.move(cell)
-            ctx.bridge.photograph_cell(cell)
             flown.append(list(cell))
-            res = ctx.bridge.analyze(cell) or {}
-            if res.get("fire") or res.get("cargo"):
-                fire_seen = list(cell)
+            fire_det = _vlm_detect_fire(ctx, cell)
+            if fire_det:
+                dets.append(fire_det)
             ctx.emit({"kind": "artifact", "from": ctx.agent_id, "cell": list(cell),
-                      "phase": "SURVEY"})
-            ctx.emit({"kind": "analyze", "from": ctx.agent_id, "cell": list(cell),
-                      "cargo": bool(res.get("fire") or res.get("cargo")),
-                      "confidence": res.get("confidence"),
-                      "vlm": str(res.get("vlm") or "")[:120]})
-        except Exception:  # noqa: BLE001
+                       "phase": "SURVEY"})
+        except Exception:  # noqa: BLE001 — flaky leg не валит облёт
             continue
     ctx.emit({"kind": "drone_flew", "from": ctx.agent_id, "cells": flown,
-              "fire_seen": fire_seen})
-    return flown
+              "detections": dets})
+    return flown, dets
 
 
 def scout_step(ctx) -> dict:
@@ -411,9 +449,12 @@ def scout_step(ctx) -> dict:
                 "idle": False}
     real = ctx.bridge is not None
     if real:
-        _fly_zone(ctx, zone)                 # physically fly + photograph the zone
-    dets = _detections_in(ctx, zone)         # structured facts confirmed for the zone
-    how = "облетел и снял" if real else "осмотрел"
+        flown, real_dets = _fly_zone(ctx, zone)    # реальный полёт + VLM-анализ
+        dets = real_dets if real_dets else _detections_in(ctx, zone)  # fallback к map.json если VLM молчит
+        how = "облетел и снял"
+    else:
+        dets = _detections_in(ctx, zone)            # мок: данные из map.json
+        how = "осмотрел"
     msg = make_msg(ctx, "OBSERVATION", "all", "SURVEY",
                    body=(f"Зона {how} ({len(zone)} кл.): "
                          + (", ".join(f"{d['type']}@{d['cell']}"
@@ -426,35 +467,10 @@ def scout_step(ctx) -> dict:
             "messages": [msg], "idle": False}
 
 
-# ---- safety drone -----------------------------------------------------------
-def safety_step(ctx) -> dict:
-    """ВУП: в SURVEY летит к району пожара и ищет человека в окне; в EXECUTE его
-    эскорт-логика выполняется исполнителем (city_executor)."""
-    phase = ctx.phase.get("phase", "INIT")
-    if phase != "SURVEY":
-        return {"thought": "ВУП в режиме сопровождения (эскорт исполняется планом).",
-                "messages": [], "idle": True}
-    for m in ctx.messages:
-        if m.get("from") == ctx.agent_id and m.get("type") == "OBSERVATION":
-            return {"thought": "Человек уже проверен.", "messages": [], "idle": True}
-    person = ctx.scenario_map.get("person")
-    if not isinstance(person, dict):
-        return {"thought": "Данных о человеке нет.", "messages": [], "idle": True}
-    dets = [{"type": "person_in_window", "cell": person["cell"],
-             "window": person.get("window"), "confidence": 0.8}]
-    return {"thought": f"Нашёл человека в окне @{person['cell']}.",
-            "messages": [make_msg(ctx, "OBSERVATION", "all", "SURVEY",
-                         body=f"ВУП: человек в окне @{person['cell']} ({person.get('window')}).",
-                         payload={"cell": person["cell"], "detections": dets,
-                                  "name": ctx.agent_id})], "idle": False}
-
-
 def step(ctx) -> dict:
     role = ctx.role
     if role == "coordinator":
         return coordinator_step(ctx)
     if role == "rover":
         return rover_step(ctx)
-    if role == "safety_drone":
-        return safety_step(ctx)
-    return scout_step(ctx)      # scouts (and any monitor drone)
+    return scout_step(ctx)

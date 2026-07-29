@@ -3,7 +3,7 @@
 Deterministic, dependency-free, fully unit-testable WITHOUT any flight/bridge:
 this is the "critical mass" the compliance audit calls out — the two-mission
 model, energy planning, and the multi-step rover plan. The agent roles
-(city_coordinator / city_scout / city_rover / safety_drone) drive these; the LLM
+(city_coordinator / city_scout / city_rover) drive these; the LLM
 proposes and explains, but every plan is compiled and checked here.
 
 Contains:

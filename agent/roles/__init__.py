@@ -52,12 +52,12 @@ def make_msg(ctx, type_, to, phase, body, payload=None, ref=None) -> dict:
 
 
 from . import coordinator, scout, rover, painter, debate, moderator, critic  # noqa: E402 (after helpers, on purpose)
-from . import city_missions  # noqa: E402  (city_missions safety_drone role)
+from . import city_missions  # noqa: E402  (city_missions role)
 from . import scan_debate  # noqa: E402  (test-3x3 single-drone scan + dual-pilot dispute)
 
 _ROLES = {"coordinator": coordinator, "scout": scout, "rover": rover,
           "painter": painter, "debater": debate, "moderator": moderator,
-          "critic": critic, "safety_drone": city_missions}
+          "critic": critic}
 
 # Роли, которым loop даёт ОДИН дополнительный шаг на phase=DONE (обычные агенты
 # на DONE сразу выходят): критику нужен финальный вердикт по готовой картине.
