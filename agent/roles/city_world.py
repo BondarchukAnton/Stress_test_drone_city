@@ -367,6 +367,8 @@ def rank_missions(world: WorldModel) -> tuple[list, dict]:
             have = ["fire"]
     order = have
     reasons = {}
+    danger = {m.get("id") or m.get("type"): m.get("danger", 1.0) for m in world.missions}
     for m in have:
-        reasons[m] = {"danger": danger.get(m, 1.0), "score": round(score(m), 1)}
+        d = danger.get(m, 1.0)
+        reasons[m] = {"danger": d, "score": round(d, 1)}
     return order, reasons

@@ -1,0 +1,21 @@
+{
+  "name": "city-1",
+  "task": "city_missions",
+  "description": "Город 6x6: дороги, здания (препятствия), водонапорная башня, пожар",
+  "grid_size": [6, 6],
+  "cell_size_m": 0.8,
+  "grid": [
+    [0, 0, 0, 0, 0, 0],
+    [0, 1, 0, 1, 1, 0],
+    [0, 0, 0, 0, 0, 0],
+    [0, 1, 0, 0, 0, 0],
+    [0, 1, 1, 0, 1, 0],
+    [0, 0, 0, 0, 0, 0]
+  ],
+  "charge_zone": [3, 3],
+  "water_tower": [1, 3],
+  "fire": {"cell": [4, 2], "level": 2},
+  "missions": [
+    {"id": "fire", "type": "fire", "danger": 3, "deadline_s": 600}
+  ]
+}

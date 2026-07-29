@@ -1,0 +1,14 @@
+# Egress override for REAL model provider (MODEL_PROVIDER=sverk).
+# Agents need outbound internet to reach ai.sverk.tech — this override
+# attaches them to the host-reachable `edge` network.
+#
+# Usage:
+#   docker compose -f docker-compose.yml -f docker-compose.city.yml -f docker-compose.egress.yml up --build
+
+services:
+  coordinator: { networks: [mesh, edge] }
+  drone-1:     { networks: [mesh, edge] }
+  drone-2:     { networks: [mesh, edge] }
+  drone-3:     { networks: [mesh, edge] }
+  drone-4:     { networks: [mesh, edge] }
+  rover:       { networks: [mesh, edge] }

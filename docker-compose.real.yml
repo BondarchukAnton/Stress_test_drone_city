@@ -1,0 +1,92 @@
+# Overlay: реальные дроны или симулятор.
+#
+# Мок-мосты НЕ запускаются. Агенты подключаются к реальным мостам
+# на борту каждого дрона. Координатор получает URL для централизованного
+# управления через city_mission.py.
+#
+# Использование:
+#   export DRONE1_URL=http://192.168.1.10:9000
+#   export DRONE2_URL=http://192.168.1.11:9000
+#   ...
+#   docker compose -f docker-compose.yml -f docker-compose.city.yml \
+#                  -f docker-compose.egress.yml -f docker-compose.real.yml up -d
+
+services:
+  # Мок-мосты не нужны
+  bridge-drone-1: { profiles: [mock] }
+  bridge-drone-2: { profiles: [mock] }
+  bridge-drone-3: { profiles: [mock] }
+  bridge-drone-4: { profiles: [mock] }
+  bridge-rover:   { profiles: [mock] }
+
+  coordinator:
+    depends_on: []
+    networks: [mesh, edge]
+    volumes:
+      - blackboard:/blackboard
+      - ./test_fixtures:/app/test_fixtures:ro
+    environment:
+      TASK: city_missions
+      SCENARIO: city-1
+      SCOUTS: drone-1,drone-2,drone-3,drone-4
+      HOVER_ALTITUDE: "${HOVER_ALTITUDE:-2.0}"
+      DRONE1_URL: ${DRONE1_URL}
+      DRONE2_URL: ${DRONE2_URL}
+      DRONE3_URL: ${DRONE3_URL}
+      DRONE4_URL: ${DRONE4_URL}
+      ROVER_URL: ${ROVER_URL}
+
+  drone-1:
+    depends_on: []
+    networks: [mesh, edge]
+    volumes: [blackboard:/blackboard, "./test_fixtures:/app/test_fixtures:ro"]
+    environment:
+      TASK: city_missions
+      SCENARIO: city-1
+      ROLE: scout
+      BRIDGE_URL: ${DRONE1_URL}
+  drone-2:
+    depends_on: []
+    networks: [mesh, edge]
+    volumes: [blackboard:/blackboard, "./test_fixtures:/app/test_fixtures:ro"]
+    environment:
+      TASK: city_missions
+      SCENARIO: city-1
+      ROLE: scout
+      BRIDGE_URL: ${DRONE2_URL}
+  drone-3:
+    depends_on: []
+    networks: [mesh, edge]
+    volumes: [blackboard:/blackboard, "./test_fixtures:/app/test_fixtures:ro"]
+    environment:
+      TASK: city_missions
+      SCENARIO: city-1
+      ROLE: scout
+      BRIDGE_URL: ${DRONE3_URL}
+  drone-4:
+    depends_on: []
+    networks: [mesh, edge]
+    volumes: [blackboard:/blackboard, "./test_fixtures:/app/test_fixtures:ro"]
+    environment:
+      TASK: city_missions
+      SCENARIO: city-1
+      ROLE: scout
+      BRIDGE_URL: ${DRONE4_URL}
+  rover:
+    depends_on: []
+    networks: [mesh, edge]
+    volumes: [blackboard:/blackboard, "./test_fixtures:/app/test_fixtures:ro"]
+    environment:
+      TASK: city_missions
+      SCENARIO: city-1
+      ROLE: rover
+      BRIDGE_URL: ${ROVER_URL}
+      BRIDGE_TIMEOUT: "180"
+
+  hub:
+    networks: [mesh, edge]
+    volumes:
+      - blackboard:/blackboard
+    environment:
+      SCENARIO: city-1
+      TASK: city_missions

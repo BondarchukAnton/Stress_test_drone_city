@@ -1,0 +1,155 @@
+# Multi-agent drone coordination stack.
+#
+#   coordinator + drone-1..4 + rover     -> agent image
+#   bridge-drone-1..4 + bridge-rover     -> bridge-mock image
+#   hub                                  -> dashboard on :VIZ_HOST_PORT
+#
+# Default brain is `mock` — set MODEL_PROVIDER + keys in .env for real LLM.
+
+x-agent: &agent
+  image: drone-agent
+  build: { context: ., dockerfile: agent/Dockerfile }
+  restart: "no"
+  read_only: true
+  tmpfs: [/tmp]
+  security_opt: ["no-new-privileges:true"]
+  cap_drop: ["ALL"]
+  volumes:
+    - blackboard:/blackboard
+  environment: &agent-env
+    BLACKBOARD: /blackboard
+    FIXTURES: /app/test_fixtures
+    TASK: ${TASK:-safe_passage}
+    SCENARIO: ${SCENARIO:-scenario-1}
+    SCOUTS: ${SCOUTS:-drone-1,drone-2,drone-3,drone-4}
+    ROVER: rover
+    STREAM_DELAY: ${STREAM_DELAY:-0}
+    MESSAGE_DELAY: ${MESSAGE_DELAY:-0}
+    POLL_INTERVAL: ${POLL_INTERVAL:-1.0}
+    MODEL_PROVIDER: ${MODEL_PROVIDER:-mock}
+    MODEL: ${MODEL:-}
+    MODEL_TIMEOUT: ${MODEL_TIMEOUT:-30}
+    BRIDGE_TIMEOUT: ${BRIDGE_TIMEOUT:-120}
+    ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+    OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+    OPENAI_API_BASE: ${OPENAI_API_BASE:-}
+    OLLAMA_BASE: ${OLLAMA_BASE:-}
+    SVERK_API_KEY: ${SVERK_API_KEY:-}
+    SVERK_API_BASE: ${SVERK_API_BASE:-https://ai.sverk.tech/v1}
+    MODEL_VISION: ${MODEL_VISION:-}
+    VLM_FIRE_PROMPT: ${VLM_FIRE_PROMPT:-}
+  networks: [mesh]
+
+x-bridge: &bridge
+  image: drone-bridge
+  build: { context: ., dockerfile: bridge/Dockerfile }
+  restart: "no"
+  read_only: true
+  tmpfs: [/tmp]
+  security_opt: ["no-new-privileges:true"]
+  cap_drop: ["ALL"]
+  volumes:
+    - blackboard:/blackboard
+  environment:
+    BLACKBOARD: /blackboard
+    FIXTURES: /app/test_fixtures
+    SCENARIO: ${SCENARIO:-scenario-1}
+    PORT: "9000"
+    NAV_STEP_SEC: ${NAV_STEP_SEC:-0.15}
+  healthcheck:
+    test: ["CMD", "python", "-c", "import urllib.request,sys;sys.exit(0 if urllib.request.urlopen('http://localhost:9000/healthz',timeout=2).status==200 else 1)"]
+    interval: 3s
+    timeout: 3s
+    retries: 10
+  networks: [mesh]
+
+services:
+  coordinator:
+    <<: *agent
+    container_name: coordinator
+    environment:
+      <<: *agent-env
+      AGENT_ID: coordinator
+      ROLE: coordinator
+
+  drone-1:
+    <<: *agent
+    container_name: drone-1
+    depends_on: { bridge-drone-1: { condition: service_healthy } }
+    environment:
+      <<: *agent-env
+      AGENT_ID: drone-1
+      ROLE: scout
+      BRIDGE_URL: http://bridge-drone-1:9000
+  drone-2:
+    <<: *agent
+    container_name: drone-2
+    depends_on: { bridge-drone-2: { condition: service_healthy } }
+    environment:
+      <<: *agent-env
+      AGENT_ID: drone-2
+      ROLE: scout
+      BRIDGE_URL: http://bridge-drone-2:9000
+  drone-3:
+    <<: *agent
+    container_name: drone-3
+    depends_on: { bridge-drone-3: { condition: service_healthy } }
+    environment:
+      <<: *agent-env
+      AGENT_ID: drone-3
+      ROLE: scout
+      BRIDGE_URL: http://bridge-drone-3:9000
+  drone-4:
+    <<: *agent
+    container_name: drone-4
+    depends_on: { bridge-drone-4: { condition: service_healthy } }
+    environment:
+      <<: *agent-env
+      AGENT_ID: drone-4
+      ROLE: scout
+      BRIDGE_URL: http://bridge-drone-4:9000
+
+  rover:
+    <<: *agent
+    container_name: rover
+    depends_on: { bridge-rover: { condition: service_healthy } }
+    environment:
+      <<: *agent-env
+      AGENT_ID: rover
+      ROLE: rover
+      BRIDGE_URL: http://bridge-rover:9000
+
+  bridge-drone-1: { <<: *bridge, container_name: bridge-drone-1, environment: { BLACKBOARD: /blackboard, FIXTURES: /app/test_fixtures, SCENARIO: "${SCENARIO:-scenario-1}", PORT: "9000", AGENT_ID: drone-1 } }
+  bridge-drone-2: { <<: *bridge, container_name: bridge-drone-2, environment: { BLACKBOARD: /blackboard, FIXTURES: /app/test_fixtures, SCENARIO: "${SCENARIO:-scenario-1}", PORT: "9000", AGENT_ID: drone-2 } }
+  bridge-drone-3: { <<: *bridge, container_name: bridge-drone-3, environment: { BLACKBOARD: /blackboard, FIXTURES: /app/test_fixtures, SCENARIO: "${SCENARIO:-scenario-1}", PORT: "9000", AGENT_ID: drone-3 } }
+  bridge-drone-4: { <<: *bridge, container_name: bridge-drone-4, environment: { BLACKBOARD: /blackboard, FIXTURES: /app/test_fixtures, SCENARIO: "${SCENARIO:-scenario-1}", PORT: "9000", AGENT_ID: drone-4 } }
+  bridge-rover:   { <<: *bridge, container_name: bridge-rover,   environment: { BLACKBOARD: /blackboard, FIXTURES: /app/test_fixtures, SCENARIO: "${SCENARIO:-scenario-1}", PORT: "9000", AGENT_ID: rover, NAV_STEP_SEC: "${NAV_STEP_SEC:-0.15}" } }
+
+  hub:
+    image: drone-hub
+    build: { context: ., dockerfile: hub/Dockerfile }
+    container_name: hub
+    restart: "no"
+    read_only: true
+    tmpfs: [/tmp]
+    security_opt: ["no-new-privileges:true"]
+    cap_drop: ["ALL"]
+    ports: ["${VIZ_HOST_PORT:-8095}:8080"]
+    environment:
+      BLACKBOARD: /blackboard
+      FIXTURES: /app/test_fixtures
+      SCENARIO: ${SCENARIO:-scenario-1}
+      TASK: ${TASK:-}
+      PORT: "8080"
+    volumes:
+      - blackboard:/blackboard:ro
+    networks: [edge]
+
+networks:
+  mesh:
+    internal: true
+  edge:
+    driver: bridge
+
+volumes:
+  blackboard:

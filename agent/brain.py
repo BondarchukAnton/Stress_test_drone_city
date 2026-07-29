@@ -672,12 +672,15 @@ class Brain:
                 headers = {"content-type": "application/json"}
                 if key:
                     headers["authorization"] = f"Bearer {key}"
-                payload = {"model": model, "max_tokens": max_tokens, "messages": [
+                payload = {"model": model, "max_tokens": max_tokens,
+                    "temperature": 0,
+                    "messages": [
                     {"role": "system", "content": system},
                     {"role": "user", "content": [
                         {"type": "text", "text": user},
                         {"type": "image_url",
-                         "image_url": {"url": f"data:image/png;base64,{b64}"}}]}]}
+                         "image_url": {"url": f"data:image/png;base64,{b64}",
+                                       "detail": "high"}}]}]}
                 if "api.openai.com" not in base:
                     payload.update(_no_think_params())
                 data = self._post(f"{base.rstrip('/')}/chat/completions",

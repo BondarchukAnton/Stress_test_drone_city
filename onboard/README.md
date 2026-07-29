@@ -29,7 +29,7 @@ docker compose -p drone-5 -f docker-compose.drone.yml up -d
 The drone registers with the hub on boot, the coordinator picks it up
 automatically (registry discovery), and its streamed reasoning shows up on the
 dashboard — click the node to read its full thinking + chat. The bridge stays
-local to the robot (mock now; the `rclpy` node in `../bridge/ros2/` on hardware).
+local to the robot (mock now; hardware HTTP bridge with the same contract).
 
 ## B. Native PicoClaw as the brain (drop-in)
 

@@ -22,7 +22,7 @@ from dataclasses import dataclass, field
 from .city_world import (
     EnergyLedger, RouteBlocked, WorldModel, astar, path_moves,
     fire_route, fire_approach, rank_missions,
-    WATER_DWELL_S,
+    WATER_CAPACITY, WATER_DWELL_S,
     water_dwell_valid,
 )
 

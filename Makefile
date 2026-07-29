@@ -1,4 +1,4 @@
-# Stress Test Drone City — Makefile
+# Многоагентный координатор дронов — Makefile
 #
 # make city-mock     — мок-мозги + мок-дроны (разработка без всего)
 # make city-sverk    — реальный LLM + мок-дроны (отладка агентов)
