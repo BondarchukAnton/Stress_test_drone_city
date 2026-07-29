@@ -13,8 +13,13 @@ dist/
 # Ignore log files
 *.log
 
-# Ignore temporary files
+# Ignore .env files (but keep .example templates)
+.env*
+!.env.*.example
 *.tmp
+
+# Ignore runtime blackboard
+blackboard/
 
 # Ignore aider input history
 .aider.input.history

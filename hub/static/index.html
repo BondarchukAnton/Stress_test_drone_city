@@ -1,13 +1,113 @@
-<!-- index.html -->
-
 <!DOCTYPE html>
-<html lang="en">
+<html lang="ru">
 <head>
-    <meta charset="UTF-8">
-    <title>Дашборд</title>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Drone City — Dashboard</title>
+<style>
+*{margin:0;padding:0;box-sizing:border-box}
+body{font:14px/1.5 monospace;background:#0b0f16;color:#e0e6ed;padding:20px}
+h1{font-size:18px;margin-bottom:8px;color:#6cf}
+h2{font-size:14px;margin:16px 0 8px;color:#8af}
+.grid{display:grid;gap:4px}
+.panel{border:1px solid #1e2a36;border-radius:4px;padding:12px;background:#111820}
+.agent{border:1px solid #1e2a36;border-radius:4px;padding:8px;display:flex;justify-content:space-between;align-items:center}
+.agent.active{border-color:#2fa84a}
+.badge{font-size:11px;padding:2px 6px;border-radius:3px;background:#1e2a36}
+.badge.phase{background:#1560d8}
+.events{max-height:300px;overflow-y:auto;font-size:12px}
+.event{padding:4px 0;border-bottom:1px solid #1e2a36;white-space:pre-wrap;word-break:break-all}
+.event:hover{background:#151d28}
+.msg{padding:6px 8px;border-left:2px solid #2fa84a;margin:4px 0;font-size:12px}
+button{padding:6px 14px;border:none;border-radius:3px;background:#1560d8;color:#fff;cursor:pointer;font:inherit;margin-right:6px}
+button.danger{background:#8a2010}
+button:hover{opacity:.9}
+input{background:#1e2a36;border:1px solid #2e3a46;color:#e0e6ed;padding:5px 8px;border-radius:3px;font:inherit;width:100%;margin:4px 0}
+#phase{padding:4px 10px;border-radius:3px;font-weight:bold;display:inline-block}
+</style>
 </head>
 <body>
-    <h1>Дашборд</h1>
-    <!-- Добавьте здесь карту, статус дронов и чат -->
+<h1>Drone City — Dashboard</h1>
+<div id="status">connecting...</div>
+<div style="display:flex;gap:8px;margin:8px 0">
+  <button onclick="rerun()" class="danger">Rerun</button>
+  <button onclick="togglePause()" id="btn-pause">Pause</button>
+</div>
+
+<h2>Phase <span id="phase">—</span></h2>
+<div class="grid" id="agents" style="grid-template-columns:repeat(auto-fill,minmax(240px,1fr))"></div>
+
+<h2>Messages</h2>
+<div id="messages" class="panel" style="max-height:200px;overflow-y:auto"></div>
+
+<h2>Events</h2>
+<div class="events panel" id="events"></div>
+
+<script>
+const evt = document.getElementById("events");
+const msgs = document.getElementById("messages");
+const agents = document.getElementById("agents");
+const phaseEl = document.getElementById("phase");
+const statusEl = document.getElementById("status");
+const btnPause = document.getElementById("btn-pause");
+let paused = false;
+
+function rerun(){
+  if(!confirm("Wipe and restart from INIT?")) return;
+  fetch("/rerun",{method:"POST",headers:{"x-rerun":"1"}}).then(r=>r.json()).then(d=>console.log(d));
+}
+
+function togglePause(){
+  paused = !paused;
+  btnPause.textContent = paused ? "Resume" : "Pause";
+  fetch("/pause",{method:"POST",headers:{"content-type":"application/json","x-pause":"1"},
+    body:JSON.stringify({paused})}).then(r=>r.json()).then(d=>console.log(d));
+}
+
+function addEvt(obj){
+  const d=document.createElement("div");
+  d.className="event";
+  d.textContent=JSON.stringify(obj);
+  evt.insertBefore(d,evt.firstChild);
+  if(evt.children.length>500) evt.lastChild.remove();
+  if(obj.kind==="phase"){ phaseEl.textContent=obj.phase; phaseEl.style.background=obj.phase==="DONE"?"#2fa84a":"#1560d8"; }
+  if(obj.kind==="thought_end"||obj.kind==="thought"){
+    const ag=document.getElementById("agent-"+obj.from);
+    if(ag){const b=ag.querySelector(".badge.phase");if(b)b.textContent=obj.phase||"?";}
+  }
+}
+
+function loadAgents(){
+  fetch("/agents").then(r=>r.json()).then(list=>{
+    agents.innerHTML=list.map(a=>
+      `<div class="agent active" id="agent-${a.id}">
+        <div><strong>${a.id}</strong> <span class="badge">${a.role||"?"}</span></div>
+        <span class="badge phase">${a.phase||"?"}</span>
+      </div>`
+    ).join("");
+  });
+}
+
+function loadMessages(){
+  fetch("/messages").then(r=>r.json()).then(list=>{
+    msgs.innerHTML=list.slice(-30).map(m=>
+      `<div class="msg"><strong>${m.from}</strong> → ${m.to} [${m.phase}] ${m.type}: ${m.body||""}</div>`
+    ).join("");
+  });
+}
+
+function poll(){
+  fetch("/healthz").then(r=>r.json()).then(d=>{statusEl.textContent=d.ok?"connected":"error";});
+  loadAgents();
+  loadMessages();
+}
+
+const es=new EventSource("/events");
+es.onmessage=function(e){try{addEvt(JSON.parse(e.data));}catch(ex){}};
+es.onerror=function(){statusEl.textContent="SSE disconnected — retrying...";};
+
+poll();
+setInterval(poll,3000);
+</script>
 </body>
 </html>
