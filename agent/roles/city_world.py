@@ -165,11 +165,7 @@ class WorldModel:
     cell_size_m: float = 0.8
     charge_zone: Optional[list] = None
     water_tower: Optional[list] = None
-    drone_pads: list = field(default_factory=list)
-    districts: dict = field(default_factory=dict)
     fire: Optional[dict] = None         # {cell, level, confirmed_by, extinguished}
-    person: Optional[dict] = None       # {cell, window, confidence}
-    delivery: Optional[dict] = None     # {pickup, dropoff}
     missions: list = field(default_factory=list)
 
     @property
@@ -195,11 +191,7 @@ def load_world(scenario_map: dict) -> WorldModel:
         cell_size_m=float(scenario_map.get("cell_size_m", 0.8)),
         charge_zone=scenario_map.get("charge_zone") or scenario_map.get("start"),
         water_tower=scenario_map.get("water_tower"),
-        drone_pads=scenario_map.get("drone_pads") or [],
-        districts=scenario_map.get("districts") or {},
         fire=fire,
-        person=scenario_map.get("person"),
-        delivery=scenario_map.get("delivery"),
         missions=scenario_map.get("missions") or [],
     )
 
@@ -356,15 +348,11 @@ def delivery_route(world: WorldModel, *, avoid_fire: bool = True) -> tuple[list,
 
 # ---- mission planner --------------------------------------------------------
 def plan_energy_for(world: WorldModel, order: list) -> int:
-    """Total rover moves for a mission order (fire before delivery reuses the
-    running position implicitly via each compiler starting from charge_zone —
-    a conservative upper bound that always suffices)."""
+    """Total rover moves for a mission order."""
     total = 0
     for m in order:
         if m == "fire":
             _, mv = fire_route(world)
-        elif m == "delivery":
-            _, mv = delivery_route(world, avoid_fire=False)
         else:
             continue
         total += mv
@@ -372,38 +360,13 @@ def plan_energy_for(world: WorldModel, order: list) -> int:
 
 
 def rank_missions(world: WorldModel) -> tuple[list, dict]:
-    """Choose the mission order. Transparent score per candidate:
-    score = danger*10 - energy_cost - deadline_penalty. Fire is a hard predecessor
-    of delivery whenever the delivery route would otherwise cross the fire cell
-    (delivery через непотушенный пожар запрещён). Returns (order, reasons)."""
+    """Choose mission order. With fire-only, simply returns ['fire'] if fire exists."""
     have = [m.get("id") or m.get("type") for m in world.missions] or []
     if not have:
-        have = [m for m in ("fire", "delivery")
-                if (m == "fire" and world.fire) or (m == "delivery" and world.delivery)]
-    danger = {m.get("id") or m.get("type"): float(m.get("danger", 1))
-              for m in world.missions}
+        if world.fire:
+            have = ["fire"]
+    order = have
     reasons = {}
-
-    # hard constraint: if delivery must cross the fire cell, fire goes first
-    fire_blocks_delivery = False
-    if "fire" in have and "delivery" in have and world.fire_active:
-        try:
-            delivery_route(world, avoid_fire=True)
-        except RouteBlocked:
-            fire_blocks_delivery = True
-            reasons["constraint"] = "доставка не проходит мимо пожара — сначала тушим"
-
-    def score(m):
-        s = danger.get(m, 1.0) * 10.0
-        try:
-            s -= plan_energy_for(world, [m])
-        except RouteBlocked:
-            s -= 100.0
-        return s
-
-    order = sorted(have, key=lambda m: -score(m))
-    if fire_blocks_delivery:
-        order = ["fire"] + [m for m in order if m != "fire"]
     for m in have:
         reasons[m] = {"danger": danger.get(m, 1.0), "score": round(score(m), 1)}
     return order, reasons

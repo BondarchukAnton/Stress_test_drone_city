@@ -21,9 +21,9 @@ from dataclasses import dataclass, field
 
 from .city_world import (
     EnergyLedger, RouteBlocked, WorldModel, astar, path_moves,
-    fire_route, delivery_route, fire_approach, rank_missions,
-    WATER_DWELL_S, LOAD_DWELL_S, ESCORT_MAX_LAG, WATER_CAPACITY,
-    water_dwell_valid, load_dwell_valid,
+    fire_route, fire_approach, rank_missions,
+    WATER_DWELL_S,
+    water_dwell_valid,
 )
 
 SIM_TIME_BUDGET_S = 15 * 60      # регламент: зачётная попытка ≤ 15 минут
@@ -83,10 +83,7 @@ def _ev(log, type_, **kw):
 
 
 def plan_total_energy(world: WorldModel, order: list) -> int:
-    """Moves the rover needs for the WHOLE ordered plan, INCLUDING returning to the
-    charge zone between missions (regulation: dispatcher pre-computes the budget /
-    keeps a return reserve; the rover must never strand itself at 0). Fire is
-    assumed done before delivery, so delivery is costed without the fire block."""
+    """Moves the rover needs for the plan."""
     grid, charge = world.grid, world.charge_zone
     total = 0
     for m in order:
@@ -95,9 +92,6 @@ def plan_total_energy(world: WorldModel, order: list) -> int:
             total += mv
             back = astar(grid, fire_approach(world), charge)
             total += path_moves(back) if back else 0
-        elif m == "delivery":
-            _, mv = delivery_route(world, avoid_fire=False)
-            total += mv
     return total
 
 
@@ -199,9 +193,7 @@ def run_attempt(world: WorldModel, observations: list | None = None) -> dict:
     order, reasons = rank_missions(world)
     _ev(log, "MISSION_ORDER", order=order, reasons=reasons)
     rover = SimRover(cell=list(world.charge_zone or [0, 0]))
-    drone = SimSafetyDrone(cell=list(world.charge_zone or [0, 0]))
-    result = {"order": order, "fire_ok": None, "delivery_ok": None,
-              "person_found": None, "blocked": None}
+    result = {"order": order, "fire_ok": None, "blocked": None}
     # dispatcher pre-charges the whole plan up front (+2 reserve) — the rover starts
     # at 0 and gains 1 energy per confirmed second stationary in the charge zone
     try:
@@ -217,15 +209,7 @@ def run_attempt(world: WorldModel, observations: list | None = None) -> dict:
     try:
         for mission in order:
             if mission == "fire":
-                # safety drone searches for a person in the fire district (parallel)
-                drone.found_person = bool(world.person)
-                result["person_found"] = drone.found_person
-                if drone.found_person:
-                    _ev(log, "PERSON_FOUND", cell=list(world.person.get("cell")),
-                        window=world.person.get("window"))
                 result["fire_ok"] = execute_fire(world, rover, log)
-            elif mission == "delivery":
-                result["delivery_ok"] = execute_delivery(world, rover, drone, log)
     except RouteBlocked as e:
         result["blocked"] = str(e)
         _ev(log, "REPLAN_NEEDED", reason=str(e))

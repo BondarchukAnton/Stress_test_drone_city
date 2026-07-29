@@ -34,7 +34,7 @@ def _survey_zones(scenario_map, labels):
     for k in range(0, len(cells), per):
         zones[labels[(k // per) % len(labels)]] += cells[k:k + per]
     return zones
-from .city_world import (load_world, rank_missions, fire_route, delivery_route,
+from .city_world import (load_world, rank_missions, fire_route,
                          EnergyLedger, EnergyError)
 from .city_executor import run_attempt, plan_total_energy
 
@@ -42,9 +42,11 @@ from .city_executor import run_attempt, plan_total_energy
 # ---- VLM prompt for fire detection ----
 _VLM_FIRE_DEFAULT = (
     "Ты — детектор пожара на дроне. Смотришь снимок клетки сверху.\n"
-    "Ответь ОДНИМ словом: FIRE (видишь пожар/дым/огонь/яркое пламя) "
-    "или CLEAR (чисто).\n"
-    "Пожар — это яркое свечение, дым, открытое пламя в клетке."
+    "Ответь СТРОГО в формате JSON (без markdown, без ```):\n"
+    '{"fire": true|false, "count": число объектов огня, "confidence": 0.0-1.0}\n'
+    "fire=true если видишь яркое свечение, дым или открытое пламя в клетке.\n"
+    "count — сколько отдельных очагов/объектов огня ты видишь.\n"
+    "confidence — насколько ты уверен (0.0 = не уверен, 1.0 = абсолютно точно)."
 )
 
 
@@ -120,55 +122,41 @@ def coordinator_step(ctx) -> dict:
                 "idle": False}
 
     if phase == "SURVEY":
-        # wait until every scout has actually flown + reported (not just the fixture
-        # base) — the drones claim their zones then post OBSERVATIONs, and only then
-        # do the facts count as camera-confirmed.
         scouts = ctx.config.get("scouts", [])
         reported = {m.get("from") for m in ctx.messages
                     if m.get("type") == "OBSERVATION" and m.get("from") in scouts}
         world = _build_world(ctx)
         if _facts_ready(world) and len(reported) >= len(scouts):
-            facts = {"fire": world.fire, "delivery": world.delivery, "person": world.person}
-            world_bb.update(facts=facts, phase="EXECUTE")
+            world_bb.update(facts={"fire": world.fire}, phase="EXECUTE")
             ctx.bb.write_world(world_bb)
             ctx.bb.write_phase("EXECUTE", ctx.phase.get("round", 0))
-            ctx.emit({"kind": "consensus", "facts": facts})
-            body = (f"Все зоны сняты. Подтверждено: пожар {world.fire['cell']} "
-                    f"ур.{world.fire.get('level')}, "
-                    f"доставка {world.delivery['pickup']}→{world.delivery['dropoff']}"
-                    + (f", человек {world.person['cell']}" if world.person else "") + ".")
-            return {"thought": "Наблюдения сошлись — планирую миссии.",
+            ctx.emit({"kind": "consensus", "facts": {"fire": world.fire}})
+            body = f"Все зоны сняты. Пожар подтверждён: {world.fire['cell']} ур.{world.fire.get('level')}."
+            return {"thought": "Наблюдения сошлись — планирую тушение.",
                     "messages": [make_msg(ctx, "DECISION", "all", "EXECUTE", body=body,
-                                 payload=facts)], "idle": False}
+                                 payload={"fire": world.fire})], "idle": False}
         return {"thought": f"Жду облёт: отчитались {len(reported)}/{len(scouts)} дронов.",
                 "messages": [], "idle": True}
 
     if phase == "EXECUTE":
         if world_bb.get("done"):
-            return {"thought": "Миссии выполнены.", "messages": [], "idle": True}
+            return {"thought": "Миссия выполнена.", "messages": [], "idle": True}
         world = _build_world(ctx)
         order, reasons = rank_missions(world)
 
-        # REAL run: compile the atomic rover plan, hand it to the rover agent, and
-        # wait for it to drive it in gz. MOCK/test run: execute the sim oracle inline.
         if ctx.config.get("real_rover"):
             rover_id = ctx.config.get("rover", "rover")
             if not world_bb.get("rover_plan"):
                 plan = compile_rover_plan(world, order)
                 world_bb.update(missions=order, rover_plan=plan,
                                 fire_cell=world.fire_cell, water=world.water_tower,
-                                charge=world.charge_zone, delivery=world.delivery)
+                                charge=world.charge_zone)
                 ctx.bb.write_world(world_bb)
                 ctx.emit({"kind": "rover_plan", "order": order, "steps": len(plan)})
-                body = (f"План ровера ({len(plan)} шагов): {order}. Пожар "
-                        f"{world.fire_cell} ур.{world.fire.get('level')}, "
-                        f"доставка {world.delivery['pickup']}→{world.delivery['dropoff']}.")
-                return {"thought": "Скомпилировал план, передаю роверу и ВУП.",
+                body = f"План ровера ({len(plan)} шагов): {order}. Пожар {world.fire_cell} ур.{world.fire.get('level')}."
+                return {"thought": "Скомпилировал план, передаю роверу.",
                         "messages": [make_msg(ctx, "ASSIGNMENT", rover_id, "EXECUTE",
-                                     body=body, payload={"rover_plan": plan}),
-                                     make_msg(ctx, "ASSIGNMENT", "all", "EXECUTE",
-                                     body="ВУП: найди человека у пожара, потом сопровождай ровер.",
-                                     payload={"fire": world.fire_cell})],
+                                     body=body, payload={"rover_plan": plan})],
                         "idle": False}
             rp = ctx.progress.get(rover_id) or {}
             if rp.get("status") != "done":
@@ -178,28 +166,21 @@ def coordinator_step(ctx) -> dict:
             world_bb.update(done=True, phase="DONE", result=res)
             ctx.bb.write_world(world_bb)
             ctx.bb.write_phase("DONE", ctx.phase.get("round", 0))
-            body = (f"Порядок {order}. Пожар:{'OK' if res.get('fire_ok') else '—'} "
-                    f"доставка:{'OK' if res.get('delivery_ok') else '—'} "
-                    f"человек:{'да' if world.person else 'нет'}, заряд {res.get('final_energy')}.")
-            return {"thought": "Ровер выполнил план в gz, доказательства в журнале.",
+            body = f"Пожар {'потушен' if res.get('fire_ok') else '—'}, заряд {res.get('final_energy')}."
+            return {"thought": "Ровер выполнил план.",
                     "messages": [make_msg(ctx, "REPORT", "all", "DONE", body=body,
                                  payload=res)], "idle": False}
 
-        res = run_attempt(world)                 # mock/test: sim oracle inline
+        res = run_attempt(world)
         for e in res["log"]:
             ctx.emit({"kind": "city_evidence", **e})
         world_bb.update(missions=order, result={k: res[k] for k in
-                        ("order", "fire_ok", "delivery_ok", "person_found",
-                         "within_time", "final_energy", "sim_time_s")},
+                        ("order", "fire_ok", "within_time", "final_energy", "sim_time_s")},
                         log=res["log"], done=True, phase="DONE")
         ctx.bb.write_world(world_bb)
         ctx.bb.write_phase("DONE", ctx.phase.get("round", 0))
-        body = (f"Порядок {order} ({reasons.get('constraint','независимы')}). "
-                f"Пожар:{'OK' if res['fire_ok'] else '—'} доставка:"
-                f"{'OK' if res['delivery_ok'] else '—'} человек:"
-                f"{'да' if res['person_found'] else 'нет'}, "
-                f"{res['sim_time_s']}с/15мин, заряд {res['final_energy']}.")
-        return {"thought": "Выполнил план, доказательства в журнале.",
+        body = f"Пожар {'потушен' if res['fire_ok'] else '—'}, {res['sim_time_s']}с, заряд {res['final_energy']}."
+        return {"thought": "Выполнил план.",
                 "messages": [make_msg(ctx, "REPORT", "all", "DONE", body=body,
                              payload=res.get("result"))], "idle": False}
 
@@ -208,9 +189,7 @@ def coordinator_step(ctx) -> dict:
 
 # ---- rover: drive the compiled plan in gz (REAL) ----------------------------
 def compile_rover_plan(world, order: list) -> list:
-    """Flatten the ordered missions into atomic rover actions the RoverBridge can
-    drive: a leading charge for the EXACT plan budget, then each mission's navigate/
-    dwell/led/escort, returning to the charge zone between missions."""
+    """Flatten the ordered missions into atomic rover actions."""
     from .city_world import astar, path_moves
     mission_actions: list = []
     for m in order:
@@ -219,10 +198,6 @@ def compile_rover_plan(world, order: list) -> list:
             mission_actions += [a for a in fa if a["do"] != "done"]
             mission_actions.append({"do": "navigate", "to": list(world.charge_zone),
                                     "action_id": "fire-return-charge"})
-        elif m == "delivery":
-            da, _ = delivery_route(world, avoid_fire=False)
-            mission_actions += da
-    # exact energy: sum the real path length of every navigate leg, +reserve
     pos = list(world.charge_zone)
     moves = 0
     for a in mission_actions:
@@ -251,7 +226,7 @@ def rover_step(ctx) -> dict:
 
     grid = (ctx.scenario_map or {}).get("grid")
     energy = EnergyLedger()
-    fire_ok = delivery_ok = False
+    fire_ok = False
     for i, act in enumerate(plan):
         do = act.get("do")
         ctx.bb.write_progress(ctx.agent_id, {"status": "executing", "step": i})
@@ -278,27 +253,20 @@ def rover_step(ctx) -> dict:
                 aid = act.get("action_id", "")
                 if "water" in aid:
                     fire_ok = fire_ok or ok
-                if "load" in aid:
-                    delivery_ok = ok
                 ctx.emit({"kind": "city_evidence", "type": "ACTION_COMPLETED",
                           "action_id": aid, "agent_id": ctx.agent_id,
                           "evidence": {"cell": r.get("cell") or act.get("cell"),
                                        "stationary_seconds": r.get("stationary_seconds"),
                                        "led": bool(r.get("led")), "counted": ok}})
-            elif do == "escort":
-                ctx.emit({"kind": "city_evidence", "type": "ESCORT_LAUNCHED"})
-            elif do == "done":
-                if "del" in act.get("action_id", ""):
-                    delivery_ok = True
-        except Exception as exc:  # noqa: BLE001 — flaky bridge must not strand the run
+        except Exception as exc:
             ctx.emit({"kind": "city_evidence", "type": "ACTION_ERROR",
                       "action_id": act.get("action_id"), "error": type(exc).__name__})
     try:
         ctx.bridge.led("off")
-    except Exception:  # noqa: BLE001
+    except Exception:
         pass
     result = {"order": world.get("missions"), "fire_ok": fire_ok,
-              "delivery_ok": delivery_ok or True, "final_energy": energy.energy}
+              "final_energy": energy.energy}
     ctx.bb.write_progress(ctx.agent_id, {"status": "done", "result": result})
     ctx.emit({"kind": "city_evidence", "type": "ROVER_DONE", "energy": energy.energy})
     return {"thought": "Ровер отработал весь план в gz.",
@@ -386,19 +354,42 @@ def _vlm_detect_fire(ctx, cell) -> dict | None:
                    "fire": False, "confidence": 0, "label": "vlm_empty"})
         return None
 
-    vlm_lower = vlm_result.lower().strip()
-    is_fire = bool(re.search(r"\bfire\b", vlm_lower))
+    # парсим JSON-ответ VLM: {"fire": true, "count": 2, "confidence": 0.9}
+    parsed = None
+    try:
+        # VLM может обернуть в ```json или добавить текст — ищем JSON-объект
+        start = vlm_result.find("{")
+        end = vlm_result.rfind("}")
+        if start >= 0 and end > start:
+            parsed = json.loads(vlm_result[start:end + 1])
+    except (json.JSONDecodeError, ValueError):
+        pass
+
+    # fallback: ищем ключевые слова в тексте если JSON не распарсился
+    if parsed is None:
+        vlm_lower = vlm_result.lower().strip()
+        fire_detected = bool(re.search(r"\b(?:fire|пожар)\b", vlm_lower))
+        count = 1
+        cnt_match = re.search(r"(?:\bcount\b|количество|число|очагов?)[\s:]*(\d+)", vlm_lower)
+        if cnt_match:
+            count = max(1, int(cnt_match.group(1)))
+        conf = 0.85 if fire_detected else 0.9
+        conf_match = re.search(r"(?:confidence|уверенность|вероятность)[\s:]*(\d+\.?\d*)", vlm_lower)
+        if conf_match:
+            conf = min(1.0, max(0.0, float(conf_match.group(1))))
+        parsed = {"fire": fire_detected, "count": count, "confidence": conf}
+
+    is_fire = bool(parsed.get("fire"))
+    count = max(1, int(parsed.get("count", 1)))
+    confidence = min(1.0, max(0.0, float(parsed.get("confidence", 0.7))))
 
     ctx.emit({"kind": "analyze", "from": ctx.agent_id, "cell": list(cell),
-               "fire": is_fire, "confidence": 0.85 if is_fire else 0.9,
+               "fire": is_fire, "count": count, "confidence": confidence,
                "label": vlm_result[:120]})
 
     if is_fire:
-        level = 1
-        lvl_match = re.search(r"(?:уровень|level|lvl)[\s:]*(\d)", vlm_lower)
-        if lvl_match:
-            level = max(1, min(3, int(lvl_match.group(1))))
-        return {"type": "fire", "cell": list(cell), "level": level, "confidence": 0.85}
+        return {"type": "fire", "cell": list(cell),
+                "level": count, "confidence": confidence}
     return None
 
 
