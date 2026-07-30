@@ -21,6 +21,7 @@ from souls import load_soul
 from bridge_client import BridgeClient
 import run_log
 import roles
+from mission_journal import init_journal as _init_journal, journal_record as _jr, get_journal as _jg
 
 
 def env_list(name, default):
@@ -458,6 +459,12 @@ def main():
     print(f"[{agent_id}] role={role} provider={brain.provider} online"
           f"{'' if not keep_alive else ' keep_alive=1'}", flush=True)
 
+    # инициализация журнала миссии (coordinator сбрасывает старый)
+    if role == "coordinator":
+        j = _init_journal(os.environ.get("BLACKBOARD", "./blackboard"))
+        j.record("mission_start", task=config["task"], scenario=os.environ.get("SCENARIO", "?"))
+    _prev_phase = ""
+
     while True:
         run_log.refresh_from_bb(bb)
 
@@ -489,6 +496,12 @@ def main():
                         bridge, config, scenario_map)
         phase_name = ctx.phase.get("phase")
         run_log.set_agent_context(agent_id, phase_name)
+
+        # запись смены фазы в журнал
+        if phase_name and phase_name != _prev_phase:
+            _jr("phase_transition", agent=agent_id, phase=phase_name)
+            _prev_phase = phase_name
+
         _handle_commands(bb, bridge, agent_id, bind_cfg, handled_cmds,
                          messages=ctx.messages)
 
@@ -534,6 +547,8 @@ def main():
             else:
                 emit_thought(bb, brain, ctx, agent_id, phase_name, thought)
             last_thought = thought
+            # журнал: мысль агента
+            _jr("agent_thought", agent=agent_id, phase=phase_name, thought=thought[:300])
 
         # novelty-gate + post messages. The gate (§6.4) suppresses redundant
         # free-form chatter (PROPOSALs); protocol-critical messages always post
@@ -559,6 +574,10 @@ def main():
             bb.append_event(ev)
             run_log.log_event(ev)
             existing.append(cand)
+            # журнал: сообщение агента
+            _jr("agent_message", agent=agent_id, to=msg.get("to"),
+                phase=msg.get("phase"), msg_type=msg.get("type"),
+                body=msg.get("body", "")[:200])
             message_pause()
 
         time.sleep(poll)

@@ -16,17 +16,29 @@ h2{font-size:13px;margin:12px 0 6px;color:#8af;border-bottom:1px solid #1e2a36;p
 .card .role{font-size:11px;color:#8af}
 .card .cell{font-size:11px;color:#aaa}
 .card .phase{font-size:11px;padding:1px 6px;border-radius:3px;background:#1560d8;display:inline-block;margin-top:4px}
-.card .phase.done{background:#2fa84a}
+.card .phase.CHAT_SCRIPT{background:#7b2d8b}
+.card .phase.EXECUTE_FLIGHT{background:#c7800a}
+.card .phase.CHAT_TARGET{background:#0a7b5e}
+.card .phase.ROVER_EXECUTE{background:#b8450a}
+.card .phase.done,.card .phase.DONE{background:#2fa84a}
 #phase{display:inline-block;padding:2px 8px;border-radius:3px;font-weight:bold;background:#1560d8;font-size:14px}
-.events{max-height:250px;overflow-y:auto;font-size:11px}
-.event{padding:3px 0;border-bottom:1px solid #1e2a36;white-space:pre-wrap;word-break:break-all;line-height:1.3}
+#phase.CHAT_SCRIPT{background:#7b2d8b}
+#phase.EXECUTE_FLIGHT{background:#c7800a}
+#phase.CHAT_TARGET{background:#0a7b5e}
+#phase.ROVER_EXECUTE{background:#b8450a}
+#phase.DONE{background:#2fa84a}
+.events{max-height:280px;overflow-y:auto;font-size:11px}
+.event{padding:3px 6px;border-bottom:1px solid #1e2a36;white-space:pre-wrap;word-break:break-all;line-height:1.3}
 .event.fire{border-left:2px solid #f80}
-.event.move{border-left:2px solid #2af}
+.event.flight{border-left:2px solid #2af}
+.event.rover{border-left:2px solid #fa0}
+.event.target{border-left:2px solid #0f8}
 .event:hover{background:#151d28}
 button{padding:5px 12px;border:none;border-radius:3px;background:#1560d8;color:#fff;cursor:pointer;font:inherit;margin:2px 4px 2px 0}
 button.danger{background:#8a2010}
 button:hover{opacity:.9}
 .status{font-size:11px;color:#888;margin-bottom:4px}
+.stage{font-size:12px;color:#ccc;margin:4px 0;padding:4px 8px;background:#1a2530;border-radius:3px}
 </style>
 </head>
 <body>
@@ -38,6 +50,7 @@ button:hover{opacity:.9}
   <button onclick="rerun()" class="danger">Rerun</button>
   <button onclick="togglePause()" id="btn-pause">Pause</button>
 </div>
+<div id="stage"></div>
 
 <h2>Агенты</h2>
 <div class="row" id="agents"></div>
@@ -49,6 +62,7 @@ button:hover{opacity:.9}
 const evt = document.getElementById("events");
 const agents = document.getElementById("agents");
 const phaseEl = document.getElementById("phase");
+const stageEl = document.getElementById("stage");
 const statusEl = document.getElementById("status");
 const btnPause = document.getElementById("btn-pause");
 let paused = false;
@@ -66,52 +80,116 @@ function togglePause(){
     body:JSON.stringify({paused})}).then(r=>r.json());
 }
 
+function fmtCell(c){return c?`[${c[0]},${c[1]}]`:"";}
+
 function addEvt(obj){
   const d=document.createElement("div");
   d.className="event";
-  let cls = "";
-  if(obj.kind==="drone_flew"||obj.kind==="artifact") cls="move";
-  if(obj.fire) cls="fire";
+  let cls="";
+  let txt=obj.kind||"";
+
+  if(obj.from) txt+=" | "+obj.from;
+
+  switch(obj.kind){
+    case"phase":
+      phaseEl.textContent=obj.phase;
+      phaseEl.className=obj.phase;
+      txt+=" | >>> "+obj.phase;
+      break;
+    case"home_cell":
+      cls="flight";
+      txt+=" | home="+fmtCell(obj.cell)+" | aruco=("+(obj.aruco_x||0).toFixed(1)+","+(obj.aruco_y||0).toFixed(1)+")";
+      if(obj.from){known[obj.from]=known[obj.from]||{};known[obj.from].cell=obj.cell;renderAgents();}
+      break;
+    case"observer_phase": case"seeker_phase":
+      cls="flight";
+      txt+=" | "+obj.phase+(obj.photos?" | "+obj.photos+" photos":"")+(obj.seconds?" | "+obj.seconds+"s":"");
+      break;
+    case"drone_takeoff":
+      cls="flight"; txt+=" | altitude="+(obj.altitude||"2.0");
+      if(obj.from){known[obj.from]=known[obj.from]||{};known[obj.from].status="flying";renderAgents();}
+      break;
+    case"drone_land":
+      cls="flight"; txt+=" | landed";
+      if(obj.from){known[obj.from]=known[obj.from]||{};known[obj.from].status="landed";renderAgents();}
+      break;
+    case"drone_photo":
+      cls="flight"; txt+=" | cell="+fmtCell(obj.cell);
+      break;
+    case"seeker_step":
+      cls="flight"; txt+=" | step="+obj.step+" | cell="+fmtCell(obj.cell);
+      break;
+    case"seeker_photo":
+      cls="flight"; txt+=" | step="+obj.step+" | cell="+fmtCell(obj.cell);
+      break;
+    case"vlm_result":
+      if(obj.fire){cls="fire"; txt+=" | FIRE! conf="+(obj.confidence||0).toFixed(2)+" fire_cell="+fmtCell(obj.fire_cell)+" dir="+obj.direction;}
+      else{txt+=" | no fire | cell="+fmtCell(obj.cell);}
+      if(obj.from){known[obj.from]=known[obj.from]||{};known[obj.from].fire_seen=obj.fire;renderAgents();}
+      break;
+    case"target_chosen":
+      cls="target";
+      txt+=" | target="+fmtCell(obj.target_cell)+" | count="+obj.count;
+      stageEl.innerHTML='<div class="stage">Цель выбрана: '+fmtCell(obj.target_cell)+' (count='+obj.count+')</div>';
+      break;
+    case"script_chosen":
+      txt+=" | script="+obj.script;
+      stageEl.innerHTML='<div class="stage">Выбран скрипт: '+obj.script+'.py</div>';
+      break;
+    case"rover_phase": case"rover_navigate": case"rover_dwell": case"rover_dwell_led": case"rover_cycle":
+      cls="rover";
+      txt+=" | "+obj.phase+(obj.to_cell?" | to="+fmtCell(obj.to_cell):"")+(obj.seconds?" | "+obj.seconds+"s":"")+(obj.cycle?" | cycle "+obj.cycle+"/"+obj.of:"");
+      break;
+    case"rover_nav_status":
+      cls="rover"; txt+=" | state="+obj.state+(obj.distance!=null?" dist="+obj.distance:"");
+      break;
+    case"rover_done":
+      cls="rover"; txt+=" | status="+obj.status+" | fire="+fmtCell(obj.fire_cell);
+      stageEl.innerHTML='<div class="stage">Ровер завершил миссию</div>';
+      break;
+    case"mission_phase":
+      txt+=" | phase="+obj.phase+(obj.script?" | "+obj.script:"")+(obj.fire_cell?" | fire="+fmtCell(obj.fire_cell):"");
+      break;
+    case"fire_located":
+      cls="fire"; txt+=" | cell="+fmtCell(obj.cell)+" | conf="+(obj.confidence||0).toFixed(2);
+      stageEl.innerHTML='<div class="stage">Огонь обнаружен: '+fmtCell(obj.cell)+'</div>';
+      break;
+    case"observer_done": case"seeker_done":
+      cls="flight";
+      txt+=" | fire="+fmtCell(obj.fire_cell)+" | conf="+(obj.confidence||0).toFixed(2)+(obj.total_photos?" | "+obj.total_photos+" photos":"");
+      break;
+    case"drone_error":
+      txt+=" | ERROR: "+obj.error+" | phase="+obj.phase;
+      if(obj.from){known[obj.from]=known[obj.from]||{};known[obj.from].error=obj.error;renderAgents();}
+      break;
+    default:
+      if(obj.phase) txt+=" | "+obj.phase;
+      if(obj.cell) txt+=" | cell="+fmtCell(obj.cell);
+      if(obj.fire) txt+=" | FIRE!";
+      if(obj.cells) txt+=" | flew "+obj.cells.length+" cells";
+      if(obj.label) txt+=" | "+(obj.label||"").substring(0,60);
+  }
+
   d.className="event "+cls;
-
-  let txt = obj.kind||"";
-  if(obj.from) txt += " | "+obj.from;
-  if(obj.phase) txt += " | "+obj.phase;
-  if(obj.cell) txt += " | cell "+JSON.stringify(obj.cell);
-  if(obj.fire) txt += " | FIRE!";
-  if(obj.cells) txt += " | flew "+obj.cells.length+" cells";
-  if(obj.detections && obj.detections.length) txt += " | det: "+obj.detections.map(x=>x.type+"@"+JSON.stringify(x.cell)).join(",");
-  if(obj.label) txt += " | "+obj.label.substring(0,60);
   d.textContent=txt;
-
   evt.insertBefore(d,evt.firstChild);
   if(evt.children.length>300) evt.lastChild.remove();
-
-  if(obj.kind==="phase"){ phaseEl.textContent=obj.phase; phaseEl.style.background=obj.phase==="DONE"?"#2fa84a":"#1560d8"; }
-  if(obj.kind==="drone_flew" && obj.from){
-    known[obj.from] = known[obj.from] || {};
-    if(obj.cells) known[obj.from].cells = obj.cells.length;
-    known[obj.from].fire = obj.fire_seen;
-    renderAgents();
-  }
-  if(obj.kind==="observation" && obj.from){
-    known[obj.from] = known[obj.from] || {};
-    if(obj.detections) known[obj.from].dets = obj.detections;
-    renderAgents();
-  }
 }
 
 function renderAgents(list){
   if(list) list.forEach(a=>{known[a.id]={...known[a.id]||{},...a};});
   agents.innerHTML=Object.entries(known).map(([id,a])=>{
-    let extra = "";
-    if(a.cells) extra += `<div class="cell">клеток: ${a.cells}</div>`;
-    if(a.dets && a.dets.length) extra += `<div class="cell">найдено: ${a.dets.map(d=>d.type+"@"+JSON.stringify(d.cell)).join(", ")}</div>`;
+    let extra="";
+    if(a.cell) extra+=`<div class="cell">cell: ${fmtCell(a.cell)}</div>`;
+    if(a.status) extra+=`<div class="cell">status: ${a.status}</div>`;
+    if(a.fire_seen) extra+=`<div class="cell" style="color:#f80">FIRE DETECTED</div>`;
+    if(a.error) extra+=`<div class="cell" style="color:#f44">ERROR: ${a.error}</div>`;
+    if(a.dets && a.dets.length) extra+=`<div class="cell">found: ${a.dets.map(d=>d.type+"@"+fmtCell(d.cell)).join(", ")}</div>`;
     return `<div class="card">
       <div class="name">${a.id||id}</div>
       <div class="role">${a.role||"?"}</div>
       ${extra}
-      <div class="phase${a.phase==='DONE'?' done':''}">${a.phase||"?"}</div>
+      <div class="phase${a.phase?(' '+a.phase):''}">${a.phase||"?"}</div>
     </div>`;
   }).join("");
 }

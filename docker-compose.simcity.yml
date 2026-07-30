@@ -1,5 +1,5 @@
 # Overlay: 1 реальный дрон (bridge на хосте) + мок-ровер.
-# Координатор получает URL дронов для централизованного управления.
+# Каждый дрон-агент управляет своим дроном через bridge URL (BRIDGE_URL).
 #
 # Использование:
 #   export DRONE1_URL=http://host.docker.internal:9001
@@ -18,12 +18,8 @@ services:
       TASK: city_missions
       SCENARIO: city-1
       SCOUTS: drone-1
-      HOVER_ALTITUDE: "${HOVER_ALTITUDE:-2.0}"
-      DRONE1_URL: ${DRONE1_URL:-http://host.docker.internal:9001}
-      DRONE2_URL: ""
-      DRONE3_URL: ""
-      DRONE4_URL: ""
       ROVER_URL: http://bridge-rover:9000
+      KEEP_ALIVE: "1"
 
   drone-1:
     networks: [mesh, edge]
@@ -34,7 +30,7 @@ services:
       TASK: city_missions
       SCENARIO: city-1
       ROLE: scout
-      BRIDGE_URL: ${DRONE1_URL:-http://host.docker.internal:9001}
+      AGENT_ID: drone-1
 
   rover:
     networks: [mesh, edge]
@@ -43,7 +39,6 @@ services:
       TASK: city_missions
       SCENARIO: city-1
       ROLE: rover
-      BRIDGE_URL: http://bridge-rover:9000
 
   hub:
     networks: [mesh, edge]

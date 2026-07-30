@@ -13,10 +13,31 @@
 """
 from __future__ import annotations
 
+import json
 import os
 import re
+import time
 
 from . import make_msg
+from mission_journal import journal_record as _jr
+
+
+_STAGE_TOTAL = 4
+
+
+def _write_mission_report(bb_root: str, report: dict) -> None:
+    """Сохранить итоговый mission_report.json."""
+    from pathlib import Path
+    path = Path(bb_root) / "mission_report.json"
+    try:
+        path.write_text(json.dumps(report, ensure_ascii=False, indent=2))
+        print(f"[REPORT] mission_report.json written to {path}", flush=True)
+    except Exception as e:
+        print(f"[REPORT] failed to write mission_report.json: {e}", flush=True)
+
+
+def _stage_log(stage: int, msg: str) -> None:
+    print(f"[STAGE {stage}/{_STAGE_TOTAL}] {msg}", flush=True)
 
 
 def _chat_phase(ctx, phase_name: str):
@@ -89,7 +110,7 @@ def _pick_target_from_chat(ctx) -> dict:
 
 
 def _build_candidates_from_result(flight_result: dict) -> list[dict]:
-    """Собрать список кандидатов-огней из результата облёта."""
+    """Собрать список кандидатов-огней из результата облёта (observer или seeker)."""
     candidates: list[dict] = []
     drone_results = flight_result.get("drone_results") or {}
 
@@ -122,34 +143,38 @@ def _build_candidates_from_result(flight_result: dict) -> list[dict]:
     return candidates
 
 
-def _do_flight(ctx, script: str) -> dict:
-    """Запустить выбранный скрипт облёта."""
-    if script == "seeker":
+def _extract_detections(dr: dict, agent_id: str, script: str) -> list[dict]:
+    """Извлечь список находок из результата одного дрона."""
+    dets: list[dict] = []
+    photos = dr.get("photos")
+    if photos:
+        for p in photos:
+            if p.get("fire"):
+                dets.append({"cell": p.get("fire_cell"),
+                             "confidence": p.get("confidence", 0)})
+    elif dr.get("fire"):
+        dets.append({"cell": dr.get("fire_cell"),
+                     "confidence": dr.get("confidence", 0)})
+    return dets
+
+
+def _do_flight_per_drone(ctx) -> dict:
+    """Один дрон выполняет облёт через sverk_interfaces."""
+    from drone_api import init_drone
+
+    chosen = (ctx.world or {}).get("chosen_script", "observer")
+    drone = init_drone(ctx.agent_id)
+
+    if chosen == "seeker":
         from seeker import run_seeker
-        runner = run_seeker
+        return run_seeker(drone=drone, brain=ctx.brain,
+                          bb_root=os.environ.get("BLACKBOARD", "/blackboard"),
+                          scenario_map=ctx.scenario_map, emit=ctx.emit)
     else:
         from observer import run_observer
-        runner = run_observer
-
-    from city_mission import MissionConfig
-    hover = float(os.environ.get("HOVER_ALTITUDE", "2.0"))
-    cfg = MissionConfig(hover_altitude=hover)
-
-    drone_bridges = {}
-    for i in range(1, 5):
-        key = f"DRONE{i}_URL"
-        url = os.environ.get(key, "")
-        if url:
-            drone_bridges[f"drone-{i}"] = url
-
-    return runner(
-        drone_bridges=drone_bridges,
-        brain=ctx.brain,
-        bb_root=os.environ.get("BLACKBOARD", "/blackboard"),
-        scenario_map=ctx.scenario_map,
-        config=cfg,
-        emit=ctx.emit,
-    )
+        return run_observer(drone=drone, brain=ctx.brain,
+                            bb_root=os.environ.get("BLACKBOARD", "/blackboard"),
+                            scenario_map=ctx.scenario_map, emit=ctx.emit)
 
 
 # ============================ coordinator_step ============================
@@ -160,6 +185,7 @@ def coordinator_step(ctx) -> dict:
 
     # ---- INIT ----
     if phase == "INIT":
+        _stage_log(1, "Agents debating flight script (observer vs seeker)...")
         ctx.bb.write_world({"task": "city_missions",
                             "phase": "CHAT_SCRIPT", "scouts": scouts,
                             "rover": ctx.config.get("rover", "rover"),
@@ -204,7 +230,9 @@ def coordinator_step(ctx) -> dict:
             ctx.bb.write_phase("EXECUTE_FLIGHT", ctx.phase.get("round", 0))
             ctx.emit({"kind": "phase", "phase": "EXECUTE_FLIGHT"})
             ctx.emit({"kind": "script_chosen", "script": chosen})
+            _jr("script_chosen", agent=ctx.agent_id, script=chosen)
             n = len(_chat_phase(ctx, "CHAT_SCRIPT"))
+            _stage_log(2, f"Executing flight script {chosen}.py...")
             return {
                 "thought": f"Выбран {chosen}.py ({n} реплик). Запускаю облёт.",
                 "messages": [
@@ -221,36 +249,54 @@ def coordinator_step(ctx) -> dict:
             "messages": msgs_out, "idle": not msgs_out,
         }
 
-    # ---- EXECUTE_FLIGHT: запуск облёта ----
+    # ---- EXECUTE_FLIGHT: дроны летят сами ----
     if phase == "EXECUTE_FLIGHT":
         if world_bb.get("flight_done"):
             return {"thought": "Облёт выполнен.", "messages": [], "idle": True}
 
-        chosen = world_bb.get("chosen_script", "observer")
-        ctx.emit({"kind": "mission_phase", "phase": "flight",
-                  "script": chosen})
+        scouts = ctx.config.get("scouts", [])
 
-        try:
-            flight_result = _do_flight(ctx, chosen)
-        except Exception as e:
-            flight_result = {"status": "error", "error": str(e)}
+        # ждём OBSERVATION от каждого скаута
+        observed = {m.get("from") for m in ctx.messages
+                    if m.get("type") == "OBSERVATION"
+                    and m.get("from") in scouts}
+        if len(observed) < len(scouts):
+            return {
+                "thought": f"Жду облёт: отчитались {len(observed)}/{len(scouts)} дронов.",
+                "messages": [], "idle": True,
+            }
 
-        candidates = _build_candidates_from_result(flight_result)
-        world_bb["flight_result"] = flight_result
+        # собираем все результаты + diagnostics + errors_log
+        all_results: dict = {"drone_results": {}, "diagnostics": {}, "errors_log": []}
+        for m in ctx.messages:
+            if m.get("type") != "OBSERVATION" or m.get("from") not in scouts:
+                continue
+            payload = m.get("payload") or {}
+            dr = payload.get("drone_results") or {}
+            for aid, data in dr.items():
+                all_results["drone_results"][aid] = data
+            diag = payload.get("diagnostics") or {}
+            for aid, status in diag.items():
+                all_results["diagnostics"][aid] = status
+            errs = payload.get("errors_log") or []
+            all_results["errors_log"].extend(errs)
+
+        candidates = _build_candidates_from_result(all_results)
+        world_bb["flight_result"] = all_results
         world_bb["candidates"] = candidates
         world_bb["flight_done"] = True
         world_bb["phase"] = "CHAT_TARGET"
         ctx.bb.write_world(world_bb)
         ctx.bb.write_phase("CHAT_TARGET", ctx.phase.get("round", 0))
         ctx.emit({"kind": "phase", "phase": "CHAT_TARGET"})
+        _stage_log(3, "Agents selecting target cell from VLM results...")
 
-        status = flight_result.get("status", "error")
         n_candidates = len(candidates)
         best = candidates[0] if candidates else None
         best_str = (f"лучший: {best['fire_cell']} conf={best['confidence']:.2f}"
                     if best else "нет")
         return {
-            "thought": f"Облёт {chosen}.py: {status}, кандидатов: {n_candidates}, {best_str}. "
+            "thought": f"Все дроны отчитались. Кандидатов: {n_candidates}, {best_str}. "
                        f"Открываю Этап 2.",
             "messages": [], "idle": False,
         }
@@ -291,6 +337,7 @@ def coordinator_step(ctx) -> dict:
             ctx.bb.write_world(world_bb)
             ctx.bb.write_phase("DONE", ctx.phase.get("round", 0))
             ctx.emit({"kind": "phase", "phase": "DONE"})
+            _stage_log(0, "No fire detected — mission finished without target.")
             return {
                 "thought": "Кандидатов нет — миссия завершена без цели.",
                 "messages": [
@@ -316,8 +363,11 @@ def coordinator_step(ctx) -> dict:
             ctx.emit({"kind": "target_chosen",
                       "target_cell": verdict["target_cell"],
                       "count": verdict["count"]})
-
+            _jr("target_chosen", agent=ctx.agent_id,
+                cell=verdict["target_cell"], count=verdict["count"])
             tc = verdict["target_cell"]
+            cnt = verdict["count"]
+            _stage_log(4, f"Rover executing firefighting loop (count={cnt}, target={tc})...")
             n = len(_chat_phase(ctx, "CHAT_TARGET"))
             body = (f"Вердикт: целевой квадрат [{tc[0]},{tc[1]}], "
                     f"объектов: {verdict['count']}." if tc
@@ -350,6 +400,7 @@ def coordinator_step(ctx) -> dict:
             ctx.bb.write_world(world_bb)
             ctx.bb.write_phase("DONE", ctx.phase.get("round", 0))
             ctx.emit({"kind": "phase", "phase": "DONE"})
+            _stage_log(0, "No target cell — rover stays at start.")
             return {
                 "thought": "Нет цели — ровер не запускается.",
                 "messages": [
@@ -393,6 +444,31 @@ def coordinator_step(ctx) -> dict:
         ctx.emit({"kind": "phase", "phase": "DONE"})
 
         ok = rover_result.get("status") == "completed"
+        _stage_log(0, f"Mission {'completed successfully!' if ok else 'finished with errors.'}")
+
+        ext = rover_result.get("extinguished_count", 0)
+        tgt_count = rover_result.get("target_count", target_count)
+        failed_step = rover_result.get("failed_step")
+        rover_errors = rover_result.get("errors_log", [])
+
+        all_diagnostics = world_bb.get("flight_result", {}).get("diagnostics", {})
+        all_errors = world_bb.get("flight_result", {}).get("errors_log", []) + rover_errors
+        vlm_used_fallback = any("VLM Fallback" in e for e in all_errors)
+
+        report = {
+            "mission_status": "success" if ok else
+                              "completed_with_warnings" if ext > 0 else "partial_success",
+            "target_cell": target,
+            "fire_count_target": tgt_count,
+            "extinguished_count": ext,
+            "diagnostics": {
+                "drones": all_diagnostics,
+                "vlm_status": "fallback_used" if vlm_used_fallback else "ok",
+                "rover_status": failed_step or "ok",
+            },
+            "errors_log": all_errors,
+        }
+        _write_mission_report(os.environ.get("BLACKBOARD", "/blackboard"), report)
         body = (f"Ровер {'выполнил миссию' if ok else 'завершил с ошибкой'}. "
                 f"Огонь: {target}.")
         return {
@@ -429,8 +505,36 @@ def scout_step(ctx) -> dict:
         }
 
     if phase == "EXECUTE_FLIGHT":
-        return {"thought": "Облёт выполняется координатором.",
-                "messages": [], "idle": True}
+        chosen = (ctx.world or {}).get("chosen_script", "observer")
+        if _has_posted(ctx, "EXECUTE_FLIGHT"):
+            return {"thought": f"Облёт ({chosen}) выполнен.",
+                    "messages": [], "idle": True}
+
+        _stage_log(2, f"{ctx.agent_id}: executing flight script {chosen}.py...")
+        try:
+            result = _do_flight_per_drone(ctx)
+        except Exception as e:
+            result = {"status": "error", "error": str(e),
+                      "drone_results": {ctx.agent_id: {"error": str(e)}}}
+
+        ctx.bb.write_progress(ctx.agent_id, {"status": "done",
+                                             "result": result})
+        dr = result.get("drone_results", {}).get(ctx.agent_id, {})
+        dets = _extract_detections(dr, ctx.agent_id, chosen)
+        body = (f"Облёт {chosen}.py завершён. "
+                + (f"Находок: {len(dets)}." if dets else "Огонь не обнаружен."))
+        return {
+            "thought": f"Облёт {chosen}.py: {result.get('status')}.",
+            "messages": [
+                make_msg(ctx, "OBSERVATION", "all", "EXECUTE_FLIGHT",
+                         body=body,
+                         payload={"drone_results": result.get("drone_results", {}),
+                                  "diagnostics": result.get("diagnostics", {}),
+                                  "errors_log": result.get("errors_log", []),
+                                  "chosen_script": chosen})
+            ],
+            "idle": False,
+        }
 
     if phase == "CHAT_TARGET":
         if _has_posted(ctx, "CHAT_TARGET"):

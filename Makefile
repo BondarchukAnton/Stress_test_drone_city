@@ -1,52 +1,37 @@
-# Многоагентный координатор дронов — Makefile
+# Stress Test Drone City — Makefile
 #
-# make city-mock     — мок-мозги + мок-дроны (разработка без всего)
-# make city-sverk    — реальный LLM + мок-дроны (отладка агентов)
-# make city-real     — реальный LLM + реальные дроны (полёт!)
-# make down          — остановить
-# make reset         — сбросить blackboard
-# make logs          — логи всех сервисов
-# make build         — собрать образы
+# make city-sverk        — реальные дроны (sverk_interfaces)
+# make city-sverk-sim    — симулятор (sverk_interfaces + ROS2 в Docker)
+# make down              — остановить
+# make reset             — сбросить blackboard
+# make logs              — логи
 
-.PHONY: city city-mock city-sverk city-real down reset logs build hub help
+.PHONY: city-sverk city-sverk-sim down reset logs help
 
-COMPOSE_MOCK = docker compose -f docker-compose.yml -f docker-compose.city.yml
-COMPOSE_SVERK = $(COMPOSE_MOCK) -f docker-compose.egress.yml
-COMPOSE_REAL = $(COMPOSE_MOCK) -f docker-compose.egress.yml -f docker-compose.real.yml
-
-city: city-mock
-
-city-mock:
-	$(COMPOSE_MOCK) up -d --build
-	@echo "Hub (мок-мозги + мок-дроны): http://localhost:8095"
+COMPOSE_BASE = -f docker-compose.yml -f docker-compose.city.yml -f docker-compose.egress.yml
+COMPOSE_SVERK_SIM = $(COMPOSE_BASE) -f docker-compose.sverk-sim.yml
 
 city-sverk:
-	$(COMPOSE_SVERK) up -d --build
-	@echo "Hub (LLM + мок-дроны): http://localhost:8095"
+	@test -f .env.sverk || { echo "-> Создай .env.sverk из .env.sverk.example"; exit 1; }
+	./city_sverk.sh .env.sverk
 
-city-real:
-	@test -f .env.real || { echo "-> Создай .env.real из .env.real.example и укажи IP дронов"; exit 1; }
-	./city_real.sh .env.real
+city-sverk-sim:
+	$(COMPOSE_SVERK_SIM) up -d --build
+	@echo "Hub (симулятор): http://localhost:8095"
 
 down:
-	$(COMPOSE_MOCK) down --remove-orphans 2>/dev/null; true
-	-docker compose -f docker-compose.egress.yml down --remove-orphans 2>/dev/null
-	-docker compose -f docker-compose.real.yml down --remove-orphans 2>/dev/null
+	-docker compose $(COMPOSE_SVERK_SIM) down --remove-orphans 2>/dev/null
+	-docker compose -f docker-compose.yml -f docker-compose.city.yml down --remove-orphans 2>/dev/null
 
 reset:
 	rm -rf blackboard/
 
 logs:
-	$(COMPOSE_MOCK) logs -f
-
-build:
-	$(COMPOSE_MOCK) build
+	$(COMPOSE_SVERK_SIM) logs -f
 
 help:
-	@echo "make city-mock    — мок-мозги + мок-дроны (без API-ключа, без железа)"
-	@echo "make city-sverk   — реальный LLM + мок-дроны (отладка координации)"
-	@echo "make city-real    — реальный LLM + реальные дроны (нужен .env.real с IP)"
-	@echo "make down         — остановить и удалить контейнеры"
-	@echo "make reset        — удалить blackboard (сброс состояния)"
-	@echo "make logs         — логи"
-	@echo "make build        — сборка образов"
+	@echo "make city-sverk        — реальные дроны через sverk_interfaces"
+	@echo "make city-sverk-sim    — симулятор (ROS2 в Docker → sverk_interfaces)"
+	@echo "make down              — остановить"
+	@echo "make reset             — сбросить blackboard"
+	@echo "make logs              — логи"

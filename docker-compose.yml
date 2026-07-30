@@ -1,8 +1,10 @@
-# Multi-agent drone coordination stack.
+# Многоагентный координатор дронов.
+# Дроны управляются через sverk_interfaces (ROS2).
+# Ровер — через HTTP API :8767.
 #
-#   coordinator + drone-1..4 + rover     -> agent image
-#   bridge-drone-1..4 + bridge-rover     -> bridge-mock image
-#   hub                                  -> dashboard on :VIZ_HOST_PORT
+#   coordinator + drone-1..4 + rover    -> agent image
+#   bridge-rover                        -> bridge-mock image (только ровер)
+#   hub                                 -> dashboard
 #
 # Default brain is `mock` — set MODEL_PROVIDER + keys in .env for real LLM.
 
@@ -75,54 +77,40 @@ services:
   drone-1:
     <<: *agent
     container_name: drone-1
-    depends_on: { bridge-drone-1: { condition: service_healthy } }
     environment:
       <<: *agent-env
       AGENT_ID: drone-1
       ROLE: scout
-      BRIDGE_URL: http://bridge-drone-1:9000
   drone-2:
     <<: *agent
     container_name: drone-2
-    depends_on: { bridge-drone-2: { condition: service_healthy } }
     environment:
       <<: *agent-env
       AGENT_ID: drone-2
       ROLE: scout
-      BRIDGE_URL: http://bridge-drone-2:9000
   drone-3:
     <<: *agent
     container_name: drone-3
-    depends_on: { bridge-drone-3: { condition: service_healthy } }
     environment:
       <<: *agent-env
       AGENT_ID: drone-3
       ROLE: scout
-      BRIDGE_URL: http://bridge-drone-3:9000
   drone-4:
     <<: *agent
     container_name: drone-4
-    depends_on: { bridge-drone-4: { condition: service_healthy } }
     environment:
       <<: *agent-env
       AGENT_ID: drone-4
       ROLE: scout
-      BRIDGE_URL: http://bridge-drone-4:9000
 
   rover:
     <<: *agent
     container_name: rover
-    depends_on: { bridge-rover: { condition: service_healthy } }
     environment:
       <<: *agent-env
       AGENT_ID: rover
       ROLE: rover
-      BRIDGE_URL: http://bridge-rover:9000
 
-  bridge-drone-1: { <<: *bridge, container_name: bridge-drone-1, environment: { BLACKBOARD: /blackboard, FIXTURES: /app/test_fixtures, SCENARIO: "${SCENARIO:-scenario-1}", PORT: "9000", AGENT_ID: drone-1 } }
-  bridge-drone-2: { <<: *bridge, container_name: bridge-drone-2, environment: { BLACKBOARD: /blackboard, FIXTURES: /app/test_fixtures, SCENARIO: "${SCENARIO:-scenario-1}", PORT: "9000", AGENT_ID: drone-2 } }
-  bridge-drone-3: { <<: *bridge, container_name: bridge-drone-3, environment: { BLACKBOARD: /blackboard, FIXTURES: /app/test_fixtures, SCENARIO: "${SCENARIO:-scenario-1}", PORT: "9000", AGENT_ID: drone-3 } }
-  bridge-drone-4: { <<: *bridge, container_name: bridge-drone-4, environment: { BLACKBOARD: /blackboard, FIXTURES: /app/test_fixtures, SCENARIO: "${SCENARIO:-scenario-1}", PORT: "9000", AGENT_ID: drone-4 } }
   bridge-rover:   { <<: *bridge, container_name: bridge-rover,   environment: { BLACKBOARD: /blackboard, FIXTURES: /app/test_fixtures, SCENARIO: "${SCENARIO:-scenario-1}", PORT: "9000", AGENT_ID: rover, NAV_STEP_SEC: "${NAV_STEP_SEC:-0.15}" } }
 
   hub:

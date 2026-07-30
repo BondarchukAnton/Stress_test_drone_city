@@ -1,7 +1,7 @@
 # Overlay: city_missions scenario (пожар + ровер в городе 6×6).
 #
-# Агенты обсуждают план в чате, затем координатор запускает
-# city_mission.py, который управляет всеми дронами через мосты.
+# Фазовый поток: CHAT_SCRIPT → EXECUTE_FLIGHT → CHAT_TARGET → ROVER_EXECUTE → DONE
+# Координатор держит KEEP_ALIVE=1 чтобы контейнер не упал до завершения всех фаз.
 #
 #   docker compose -f docker-compose.yml -f docker-compose.city.yml up --build
 #
@@ -18,28 +18,24 @@ services:
       TASK: city_missions
       SCENARIO: city-1
       SCOUTS: drone-1,drone-2,drone-3,drone-4
-      HOVER_ALTITUDE: "${HOVER_ALTITUDE:-2.0}"
-      DRONE1_URL: http://bridge-drone-1:9000
-      DRONE2_URL: http://bridge-drone-2:9000
-      DRONE3_URL: http://bridge-drone-3:9000
-      DRONE4_URL: http://bridge-drone-4:9000
       ROVER_URL: http://bridge-rover:9000
+      KEEP_ALIVE: "1"
   drone-1:
     networks: [mesh, edge]
     volumes: [blackboard:/blackboard, "./test_fixtures:/app/test_fixtures:ro"]
-    environment: { TASK: city_missions, SCENARIO: city-1, ROLE: scout }
+    environment: { TASK: city_missions, SCENARIO: city-1, ROLE: scout, AGENT_ID: drone-1 }
   drone-2:
     networks: [mesh, edge]
     volumes: [blackboard:/blackboard, "./test_fixtures:/app/test_fixtures:ro"]
-    environment: { TASK: city_missions, SCENARIO: city-1, ROLE: scout }
+    environment: { TASK: city_missions, SCENARIO: city-1, ROLE: scout, AGENT_ID: drone-2 }
   drone-3:
     networks: [mesh, edge]
     volumes: [blackboard:/blackboard, "./test_fixtures:/app/test_fixtures:ro"]
-    environment: { TASK: city_missions, SCENARIO: city-1, ROLE: scout }
+    environment: { TASK: city_missions, SCENARIO: city-1, ROLE: scout, AGENT_ID: drone-3 }
   drone-4:
     networks: [mesh, edge]
     volumes: [blackboard:/blackboard, "./test_fixtures:/app/test_fixtures:ro"]
-    environment: { TASK: city_missions, SCENARIO: city-1, ROLE: scout }
+    environment: { TASK: city_missions, SCENARIO: city-1, ROLE: scout, AGENT_ID: drone-4 }
   rover:
     networks: [mesh, edge]
     volumes: [blackboard:/blackboard, "./test_fixtures:/app/test_fixtures:ro"]
@@ -47,7 +43,6 @@ services:
       TASK: city_missions
       SCENARIO: city-1
       ROLE: rover
-      BRIDGE_URL: http://bridge-rover:9000
   hub:
     networks: [mesh, edge]
     volumes:
