@@ -12,14 +12,11 @@ import base64
 import urllib.request
 import os
 import re
+from datetime import datetime, timezone
 
 FOLDER = sys.argv[1] if len(sys.argv) > 1 else os.path.join(
     os.path.dirname(os.path.abspath(__file__)), "img"
 )
-
-if not os.path.isdir(FOLDER):
-    print(f"Папка не найдена: {FOLDER}")
-    sys.exit(1)
 
 _FIRE_PROMPT = """Ты — специализированный детектор пожара на бортовом компьютере дрона.
 Перед тобой кадр с камеры дрона, направленной строго вниз на игровое поле, разделенное на квадратные клетки.
@@ -111,9 +108,6 @@ def analyze_image(filepath):
     return content
 
 
-from datetime import datetime, timezone
-
-
 def now_iso():
     return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
@@ -162,33 +156,38 @@ def scan_folder(folder):
     return results
 
 
-IMAGES = sorted(
-    f for f in os.listdir(FOLDER)
-    if f.lower().endswith((".png", ".jpg", ".jpeg"))
-)
+if __name__ == "__main__":
+    if not os.path.isdir(FOLDER):
+        print(f"Папка не найдена: {FOLDER}")
+        sys.exit(1)
 
-if not IMAGES:
-    print(f"Нет изображений в {FOLDER}")
-    sys.exit(0)
+    IMAGES = sorted(
+        f for f in os.listdir(FOLDER)
+        if f.lower().endswith((".png", ".jpg", ".jpeg"))
+    )
 
-print(f"Папка: {FOLDER}")
-print(f"Изображений: {len(IMAGES)}\n")
+    if not IMAGES:
+        print(f"Нет изображений в {FOLDER}")
+        sys.exit(0)
 
-results = scan_folder(FOLDER)
+    print(f"Папка: {FOLDER}")
+    print(f"Изображений: {len(IMAGES)}\n")
 
-fired = len(results)
-total = len(IMAGES)
-for r in results:
-    print(f"\n[{r['image']}]")
-    print(f"  дрон над:    ({r['drone_cell'][0]};{r['drone_cell'][1]})")
-    print(f"  direction:    {r['direction']}  →  смещение "
-          f"({r['cell'][0]-r['drone_cell'][0]:+d};{r['cell'][1]-r['drone_cell'][1]:+d})")
-    print(f"  confidence:   {r['confidence']}")
-    print(f"  count:        {r['count']}")
-    print(f"  summary:      {r['summary']}")
-    print(f"  >>> КЛЕТКА С ОГНЁМ: ({r['cell'][0]};{r['cell'][1]})")
+    results = scan_folder(FOLDER)
 
-if fired == 0:
-    print("\nОГОНЬ НЕ ОБНАРУЖЕН НИ НА ОДНОМ КАДРЕ.")
-else:
-    print(f"\nГотово: {fired}/{total} кадров с огнём.")
+    fired = len(results)
+    total = len(IMAGES)
+    for r in results:
+        print(f"\n[{r['image']}]")
+        print(f"  дрон над:    ({r['drone_cell'][0]};{r['drone_cell'][1]})")
+        print(f"  direction:    {r['direction']}  →  смещение "
+              f"({r['cell'][0]-r['drone_cell'][0]:+d};{r['cell'][1]-r['drone_cell'][1]:+d})")
+        print(f"  confidence:   {r['confidence']}")
+        print(f"  count:        {r['count']}")
+        print(f"  summary:      {r['summary']}")
+        print(f"  >>> КЛЕТКА С ОГНЁМ: ({r['cell'][0]};{r['cell'][1]})")
+
+    if fired == 0:
+        print("\nОГОНЬ НЕ ОБНАРУЖЕН НИ НА ОДНОМ КАДРЕ.")
+    else:
+        print(f"\nГотово: {fired}/{total} кадров с огнём.")

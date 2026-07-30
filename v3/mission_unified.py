@@ -11,13 +11,10 @@ import subprocess
 import sys
 import os
 import json
-import time
 from datetime import datetime, timezone
-from pathlib import Path
 
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 MISSION_FLY = os.path.join(SCRIPT_DIR, "fly_photo_land_pw.py")
-SCAN = os.path.join(SCRIPT_DIR, "scan_fire_kletki.py")
 LOG_DIR = os.path.join(SCRIPT_DIR, "logs")
 
 DRONES = [
@@ -30,9 +27,11 @@ DRONES = [
 os.makedirs(LOG_DIR, exist_ok=True)
 
 BB = None
+bb_now_iso = None
 try:
     sys.path.insert(0, os.path.join(os.path.dirname(SCRIPT_DIR), "agent"))
-    from bb import Blackboard, now_iso as bb_now_iso
+    from bb import Blackboard, now_iso as _bb_now_iso
+    bb_now_iso = _bb_now_iso
     BB = Blackboard()
     BB.ensure_layout()
     print("[BB] Blackboard подключён")
@@ -73,7 +72,7 @@ def bb_post_message(msg_type, body, payload=None):
             "type": msg_type,
             "body": body,
             "payload": payload or {},
-            "ts": bb_now_iso() if 'bb_now_iso' in dir() else datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+            "ts": bb_now_iso() if bb_now_iso else datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
         })
     except Exception as e:
         log(f"BB message error: {e}")
@@ -104,10 +103,12 @@ log("=" * 60)
 log("ФАЗА 1: ЗАПУСК ДРОНОВ (взлёт, фото каждые 3с, посадка)")
 
 procs = {}
+out_files = {}
 for ip, pw, fname in DRONES:
     cmd = [sys.executable, MISSION_FLY, ip, pw, fname]
     log(f"  [{ip}] запуск... ({fname})")
     out_f = open(os.path.join(LOG_DIR, f"drone_{ip.replace('.', '_')}.log"), "w")
+    out_files[ip] = out_f
     procs[ip] = subprocess.Popen(cmd, stdout=out_f, stderr=subprocess.STDOUT, text=True)
 
 log("Ожидание завершения дронов...")
@@ -115,13 +116,13 @@ for ip, proc in procs.items():
     proc.wait(timeout=300)
     status = "OK" if proc.returncode == 0 else f"FAIL (rc={proc.returncode})"
     log(f"  [{ip}] {status}")
+    out_files[ip].close()
 
 log("ФАЗА 1 ЗАВЕРШЕНА")
 
 # ── Фаза 2: VLM-анализ ───────────────────────────────────────────────────
 log("ФАЗА 2: АНАЛИЗ СНИМКОВ (VLM)")
 
-sys.path.insert(0, SCRIPT_DIR)
 from scan_fire_kletki import scan_folder, now_iso
 
 fires = scan_folder(SCRIPT_DIR)

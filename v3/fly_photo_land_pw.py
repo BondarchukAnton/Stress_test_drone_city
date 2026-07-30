@@ -60,7 +60,7 @@ def main():
 
         sftp = ssh.open_sftp()
         remote_script = "/tmp/_fly_mission.py"
-        with sftp.file(remote_script, "w") as f:
+        with sftp.open(remote_script, "w") as f:
             f.write(ONBOARD_SCRIPT)
         sftp.close()
 
