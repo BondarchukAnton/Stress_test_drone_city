@@ -256,17 +256,36 @@ def coordinator_step(ctx) -> dict:
 
         scouts = ctx.config.get("scouts", [])
 
-        # ждём OBSERVATION от каждого скаута
+        # ждём OBSERVATION от каждого скаута (с дедлайном)
         observed = {m.get("from") for m in ctx.messages
                     if m.get("type") == "OBSERVATION"
                     and m.get("from") in scouts}
-        if len(observed) < len(scouts):
+        from .phase_util import deadline_passed as _dl
+        if len(observed) < len(scouts) and not _dl(ctx):
             return {
                 "thought": f"Жду облёт: отчитались {len(observed)}/{len(scouts)} дронов.",
                 "messages": [], "idle": True,
             }
 
-        # собираем все результаты + diagnostics + errors_log
+        if not observed:
+            world_bb["flight_done"] = True
+            world_bb["candidates"] = []
+            world_bb["phase"] = "DONE"
+            world_bb["done"] = True
+            ctx.bb.write_world(world_bb)
+            ctx.bb.write_phase("DONE", ctx.phase.get("round", 0))
+            ctx.emit({"kind": "phase", "phase": "DONE"})
+            _stage_log(0, "No drones reported — mission cannot continue.")
+            return {
+                "thought": "Ни один дрон не отчитался. Завершаю.",
+                "messages": [
+                    make_msg(ctx, "REPORT", "all", "DONE",
+                             body="Облёт не выполнен: все дроны недоступны.",
+                             payload={})
+                ],
+                "idle": False,
+            }
+
         all_results: dict = {"drone_results": {}, "diagnostics": {}, "errors_log": []}
         for m in ctx.messages:
             if m.get("type") != "OBSERVATION" or m.get("from") not in scouts:

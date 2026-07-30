@@ -53,16 +53,41 @@ echo "Дроны: $SCOUTS"
 # === Проверка доступности ===
 echo ""
 echo "=== Проверка дронов ==="
+AVAILABLE_DRONES=()
+UNAVAILABLE_DRONES=()
 for id in "${!DRONES[@]}"; do
   host="${DRONES[$id]}"
   echo -n "  $id ($host) ... "
   if ssh -o ConnectTimeout=5 -o BatchMode=yes "${DRONE_USER}@${host}" "echo ok" >/dev/null 2>&1; then
     echo "OK"
+    AVAILABLE_DRONES+=("$id")
   else
-    echo "НЕДОСТУПЕН"
-    echo "! Проверь SSH-доступ: ssh ${DRONE_USER}@${host}"
-    exit 1
+    echo "НЕДОСТУПЕН — пропускаю"
+    UNAVAILABLE_DRONES+=("$id")
   fi
+done
+
+if [ ${#UNAVAILABLE_DRONES[@]} -gt 0 ]; then
+  echo ""
+  echo "! Недоступны: ${UNAVAILABLE_DRONES[*]}"
+  echo "  Миссия продолжается с доступными дронами."
+fi
+
+if [ ${#AVAILABLE_DRONES[@]} -eq 0 ]; then
+  echo "! Ни один дрон не доступен. Выход."
+  exit 1
+fi
+
+# пересобираем DRONES — только доступные
+declare -A DRONES_AVAILABLE
+for id in "${AVAILABLE_DRONES[@]}"; do
+  DRONES_AVAILABLE[$id]="${DRONES[$id]}"
+done
+# заменяем исходный массив
+unset DRONES
+declare -A DRONES
+for id in "${!DRONES_AVAILABLE[@]}"; do
+  DRONES[$id]="${DRONES_AVAILABLE[$id]}"
 done
 
 # === Деплой на каждый дрон ===

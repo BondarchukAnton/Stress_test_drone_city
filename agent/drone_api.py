@@ -73,11 +73,13 @@ class DroneHandle:
         self._photo_dir.mkdir(parents=True, exist_ok=True)
 
         if _sverk_available:
+            ns = os.environ.get("ROS_NAMESPACE", "")
             try:
                 self._drone = sverk_interfaces.init(
                     Nodename=f'mission_node_{agent_id.replace("-", "_")}'
                 )
-                print(f"[{agent_id}] sverk_interfaces initialized", flush=True)
+                ns_str = f" ns={ns}" if ns else ""
+                print(f"[{agent_id}] sverk_interfaces initialized{ns_str}", flush=True)
             except Exception as e:
                 print(f"[{agent_id}] sverk_interfaces init failed: {e}", flush=True)
 

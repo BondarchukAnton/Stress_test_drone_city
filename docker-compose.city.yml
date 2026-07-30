@@ -18,7 +18,8 @@ services:
       TASK: city_missions
       SCENARIO: city-1
       SCOUTS: drone-1,drone-2,drone-3,drone-4
-      ROVER_URL: http://bridge-rover:9000
+      ROVER_URL: "${ROVER_URL:-}"
+      ROVER_API_URL: "${ROVER_API_URL:-}"
       KEEP_ALIVE: "1"
   drone-1:
     networks: [mesh, edge]
@@ -43,6 +44,8 @@ services:
       TASK: city_missions
       SCENARIO: city-1
       ROLE: rover
+      ROVER_URL: "${ROVER_URL:-}"
+      ROVER_API_URL: "${ROVER_API_URL:-}"
   hub:
     networks: [mesh, edge]
     volumes:

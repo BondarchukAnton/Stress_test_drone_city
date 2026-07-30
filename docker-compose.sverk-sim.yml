@@ -1,60 +1,17 @@
-# Overlay: симулятор — агенты в Docker подключаются к ROS2 симулятора на хосте.
+# Overlay: симулятор — drone-агенты на хосте, coordinator+hub в Docker.
 #
-# Каждый drone-агент запускает sverk_interfaces.init() внутри контейнера.
-# ROS2 discovery через host-сеть + ROS_DOMAIN_ID.
+# Симулятор запускается отдельно с docker-compose.sim.hostnet.yml
+# (network_mode: host, чтобы DDS был виден хосту).
 #
-# На хосте должен быть запущен симулятор с ROS2 (PX4 SITL + Gazebo).
+# Drone-агенты запускаются прямо на хосте скриптом city_sverk_sim.sh.
 #
 #   docker compose -f docker-compose.yml -f docker-compose.city.yml \
-#                  -f docker-compose.egress.yml -f docker-compose.sverk-sim.yml up -d --build
+#                  -f docker-compose.egress.yml \
+#                  -f docker-compose.sverk-sim.yml up -d
 
 services:
-  drone-1:
-    network_mode: host
-    depends_on: []
-    volumes: ["./blackboard:/blackboard", "./test_fixtures:/app/test_fixtures:ro"]
-    environment:
-      TASK: city_missions
-      SCENARIO: city-1
-      ROLE: scout
-      ROS_DOMAIN_ID: "${ROS_DOMAIN_ID:-0}"
-      AGENT_ID: drone-1
-
-  drone-2:
-    network_mode: host
-    depends_on: []
-    volumes: ["./blackboard:/blackboard", "./test_fixtures:/app/test_fixtures:ro"]
-    environment:
-      TASK: city_missions
-      SCENARIO: city-1
-      ROLE: scout
-      ROS_DOMAIN_ID: "${ROS_DOMAIN_ID:-0}"
-      AGENT_ID: drone-2
-
-  drone-3:
-    network_mode: host
-    depends_on: []
-    volumes: ["./blackboard:/blackboard", "./test_fixtures:/app/test_fixtures:ro"]
-    environment:
-      TASK: city_missions
-      SCENARIO: city-1
-      ROLE: scout
-      ROS_DOMAIN_ID: "${ROS_DOMAIN_ID:-0}"
-      AGENT_ID: drone-3
-
-  drone-4:
-    network_mode: host
-    depends_on: []
-    volumes: ["./blackboard:/blackboard", "./test_fixtures:/app/test_fixtures:ro"]
-    environment:
-      TASK: city_missions
-      SCENARIO: city-1
-      ROLE: scout
-      ROS_DOMAIN_ID: "${ROS_DOMAIN_ID:-0}"
-      AGENT_ID: drone-4
-
   coordinator:
-    network_mode: host
+    networks: [mesh, edge]
     volumes: ["./blackboard:/blackboard", "./test_fixtures:/app/test_fixtures:ro"]
     environment:
       TASK: city_missions
@@ -65,7 +22,7 @@ services:
       KEEP_ALIVE: "1"
 
   rover:
-    network_mode: host
+    networks: [mesh, edge]
     volumes: ["./blackboard:/blackboard", "./test_fixtures:/app/test_fixtures:ro"]
     environment:
       TASK: city_missions
@@ -75,10 +32,10 @@ services:
       ROVER_API_URL: "${ROVER_API_URL:-}"
 
   hub:
-    network_mode: host
+    networks: [mesh, edge]
+    ports: ["8095:8080"]
     volumes: ["./blackboard:/blackboard"]
     environment:
       SCENARIO: city-1
       TASK: city_missions
-      PORT: "8095"
-      VIZ_HOST_PORT: "${VIZ_HOST_PORT:-8095}"
+      PORT: "8080"
