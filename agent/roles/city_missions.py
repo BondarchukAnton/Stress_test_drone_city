@@ -19,6 +19,7 @@ import re
 import time
 
 from . import make_msg
+from .phase_util import deadline_in, iso as _iso, now as _now, parse_iso as _parse_iso
 from mission_journal import journal_record as _jr
 
 
@@ -186,11 +187,12 @@ def coordinator_step(ctx) -> dict:
     # ---- INIT ----
     if phase == "INIT":
         _stage_log(1, "Agents debating flight script (observer vs seeker)...")
+        dl = deadline_in(ctx, "chat", 120)
         ctx.bb.write_world({"task": "city_missions",
                             "phase": "CHAT_SCRIPT", "scouts": scouts,
                             "rover": ctx.config.get("rover", "rover"),
                             "done": False})
-        ctx.bb.write_phase("CHAT_SCRIPT", ctx.phase.get("round", 0))
+        ctx.bb.write_phase("CHAT_SCRIPT", ctx.phase.get("round", 0), dl)
         ctx.emit({"kind": "phase", "phase": "CHAT_SCRIPT"})
         return {
             "thought": "Открываю Этап 1: выбор скрипта облёта.",
@@ -227,7 +229,8 @@ def coordinator_step(ctx) -> dict:
             world_bb["chosen_script"] = chosen
             world_bb["phase"] = "EXECUTE_FLIGHT"
             ctx.bb.write_world(world_bb)
-            ctx.bb.write_phase("EXECUTE_FLIGHT", ctx.phase.get("round", 0))
+            ctx.bb.write_phase("EXECUTE_FLIGHT", ctx.phase.get("round", 0),
+                                 deadline_in(ctx, "execute", 300))
             ctx.emit({"kind": "phase", "phase": "EXECUTE_FLIGHT"})
             ctx.emit({"kind": "script_chosen", "script": chosen})
             _jr("script_chosen", agent=ctx.agent_id, script=chosen)
@@ -306,7 +309,8 @@ def coordinator_step(ctx) -> dict:
         world_bb["flight_done"] = True
         world_bb["phase"] = "CHAT_TARGET"
         ctx.bb.write_world(world_bb)
-        ctx.bb.write_phase("CHAT_TARGET", ctx.phase.get("round", 0))
+        ctx.bb.write_phase("CHAT_TARGET", ctx.phase.get("round", 0),
+                                 deadline_in(ctx, "chat", 120))
         ctx.emit({"kind": "phase", "phase": "CHAT_TARGET"})
         _stage_log(3, "Agents selecting target cell from VLM results...")
 
@@ -377,7 +381,8 @@ def coordinator_step(ctx) -> dict:
             world_bb["target_count"] = verdict["count"]
             world_bb["phase"] = "ROVER_EXECUTE"
             ctx.bb.write_world(world_bb)
-            ctx.bb.write_phase("ROVER_EXECUTE", ctx.phase.get("round", 0))
+            ctx.bb.write_phase("ROVER_EXECUTE", ctx.phase.get("round", 0),
+                                 deadline_in(ctx, "execute", 600))
             ctx.emit({"kind": "phase", "phase": "ROVER_EXECUTE"})
             ctx.emit({"kind": "target_chosen",
                       "target_cell": verdict["target_cell"],
@@ -508,17 +513,27 @@ def scout_step(ctx) -> dict:
 
     if phase == "CHAT_SCRIPT":
         if _has_posted(ctx, "CHAT_SCRIPT"):
-            return {"thought": "Уже проголосовал за скрипт.", "messages": [], "idle": True}
+            return {"thought": "Уже высказался.", "messages": [], "idle": True}
+
+        # генерируем сообщение через LLM на основе soul-промпта
+        system = (ctx.soul_body or "")[:1500]
+        user = (
+            f"Ты — {ctx.agent_id} ({ctx.role}). Фаза: CHAT_SCRIPT — выбор скрипта облёта.\n"
+            f"Варианты: observer.py (быстрый, 20с, 1 снимок) или seeker.py (полный обход 3×3, 9 снимков).\n"
+            f"Напиши ОДНО короткое сообщение (2-4 предложения) в чат — выскажи свою позицию.\n"
+            f"Пиши на русском, от своего имени."
+        )
+        try:
+            body = ctx.brain.think(system, user, fallback=(
+                f"{ctx.agent_id}: выбираю observer.py — быстрый облёт, экономлю батарею."))
+        except Exception:
+            body = f"{ctx.agent_id}: выбираю observer.py."
+
         return {
-            "thought": "Выбираю скрипт облёта.",
+            "thought": body[:200],
+            "thinking": body,
             "messages": [
-                make_msg(ctx, "CHAT", "all", "CHAT_SCRIPT",
-                         body=(
-                             f"{ctx.agent_id}: выбираю observer.py — быстрый осмотр, "
-                             f"батарею надо экономить. Одного снимка с высоты достаточно "
-                             f"для первичной оценки."
-                         ),
-                         payload={"vote": "observer"})
+                make_msg(ctx, "CHAT", "all", "CHAT_SCRIPT", body=body)
             ],
             "idle": False,
         }
@@ -557,39 +572,37 @@ def scout_step(ctx) -> dict:
 
     if phase == "CHAT_TARGET":
         if _has_posted(ctx, "CHAT_TARGET"):
-            return {"thought": "Уже участвовал в выборе цели.",
-                    "messages": [], "idle": True}
+            return {"thought": "Уже участвовал.", "messages": [], "idle": True}
         world = ctx.world or {}
         candidates = world.get("candidates") or []
-        my_detections = [c for c in candidates if c.get("detected_by") == ctx.agent_id]
-        if my_detections:
-            best = max(my_detections, key=lambda c: c["confidence"])
-            return {
-                "thought": f"Голосую за свою находку: {best['fire_cell']} conf={best['confidence']:.2f}.",
-                "messages": [
-                    make_msg(ctx, "CHAT", "all", "CHAT_TARGET",
-                             body=(
-                                 f"{ctx.agent_id}: голосую за квадрат "
-                                 f"[{best['fire_cell'][0]},{best['fire_cell'][1]}], "
-                                 f"count: {best.get('count', 1)}. "
-                                 f"Уверенность {best['confidence']:.2f}. "
-                                 f"{best.get('summary', '')[:60]}"
-                             ),
-                             payload={"cell": best["fire_cell"],
-                                      "count": best.get("count", 1),
-                                      "confidence": best["confidence"]})
-                ],
-                "idle": False,
-            }
+
+        # генерируем сообщение через LLM
+        cand_list = "\n".join(
+            f"  [{c['fire_cell'][0]},{c['fire_cell'][1]}] conf={c['confidence']:.2f} "
+            f"от {c['detected_by']} — {c.get('summary','')[:80]}"
+            for c in candidates[:10]
+        ) if candidates else "кандидатов нет"
+        system = (ctx.soul_body or "")[:1500]
+        user = (
+            f"Ты — {ctx.agent_id} ({ctx.role}). Фаза: CHAT_TARGET — выбор целевого квадрата.\n"
+            f"Кандидаты от VLM:\n{cand_list}\n\n"
+            f"Напиши ОДНО короткое сообщение (2-4 предложения) — какой квадрат выбираешь "
+            f"и почему (уверенность, аргументы). Укажи [x,y] и count.\n"
+            f"Пиши на русском."
+        )
+        try:
+            body = ctx.brain.think(system, user, fallback=(
+                f"{ctx.agent_id}: цель [{candidates[0]['fire_cell'][0]},{candidates[0]['fire_cell'][1]}] "
+                f"— наибольшая уверенность {candidates[0]['confidence']:.2f}." if candidates
+                else f"{ctx.agent_id}: огонь не обнаружен в моей зоне."))
+        except Exception:
+            body = f"{ctx.agent_id}: согласен с большинством."
+
         return {
-            "thought": "Нет моих находок среди кандидатов.",
+            "thought": body[:200],
+            "thinking": body,
             "messages": [
-                make_msg(ctx, "CHAT", "all", "CHAT_TARGET",
-                         body=(
-                             f"{ctx.agent_id}: в моей зоне огонь не обнаружен. "
-                             f"Согласен с наиболее уверенной находкой коллег."
-                         ),
-                         payload={})
+                make_msg(ctx, "CHAT", "all", "CHAT_TARGET", body=body)
             ],
             "idle": False,
         }

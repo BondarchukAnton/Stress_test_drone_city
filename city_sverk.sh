@@ -101,13 +101,12 @@ for id in "${!DRONES[@]}"; do
   # копируем agent/ и souls/
   ssh "${DRONE_USER}@${host}" "mkdir -p ${REPO_DIR}/agent ${REPO_DIR}/souls ${REPO_DIR}/test_fixtures"
 
-  rsync -az --delete \
-    agent/ "${DRONE_USER}@${host}:${REPO_DIR}/agent/" \
-    souls/ "${DRONE_USER}@${host}:${REPO_DIR}/souls/" \
-    test_fixtures/ "${DRONE_USER}@${host}:${REPO_DIR}/test_fixtures/"
+  rsync -az --delete agent/ "${DRONE_USER}@${host}:${REPO_DIR}/agent/"
+  rsync -az --delete souls/ "${DRONE_USER}@${host}:${REPO_DIR}/souls/"
+  rsync -az --delete test_fixtures/ "${DRONE_USER}@${host}:${REPO_DIR}/test_fixtures/"
 
   # запускаем агента (в фоне, логи в файл)
-  ssh "${DRONE_USER}@${host}" "
+  ssh -n -o StrictHostKeyChecking=no "${DRONE_USER}@${host}" "
     cd ${REPO_DIR} && \
     PYTHONPATH=${REPO_DIR}/agent \
     BLACKBOARD=${REPO_DIR}/blackboard \
@@ -121,15 +120,14 @@ for id in "${!DRONES[@]}"; do
     SVERK_API_BASE=${SVERK_API_BASE:-https://ai.sverk.tech/v1} \
     nohup python3 agent/loop.py > /tmp/drone-agent-${id}.log 2>&1 &
     echo \"pid=\$!\"
-  " &
+  " </dev/null &
 done
-wait
 
 echo ""
 echo "=== Запуск координатора и хаба локально ==="
 export SCOUTS="$SCOUTS"
 docker compose -f docker-compose.yml -f docker-compose.city.yml -f docker-compose.egress.yml \
-  up -d --build coordinator hub rover
+  up -d coordinator hub rover
 
 echo ""
 echo "Дашборд: http://localhost:8095"

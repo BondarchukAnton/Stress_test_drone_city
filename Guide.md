@@ -72,19 +72,27 @@ make city-sverk-sim    # симулятор
 | `SCENARIO` | Сценарий | `city-1` |
 | `VIZ_HOST_PORT` | Порт дэшборда | `8095` |
 
-### Запуск
+### Каждый новый запуск
 
 ```bash
-# 1. Проверить что все IP правильные
-nano .env.sverk
+# 1. Полная очистка предыдущей попытки
+make clean
 
-# 2. Одна команда
+# 2. Запуск
 make city-sverk
 ```
 
+`make clean` делает три вещи:
+- Останавливает Docker-контейнеры (coordinator, hub, rover)
+- Убивает агентов на всех дронах (по IP из `.env.sverk`)
+- Очищает blackboard
+
+**Код на дронах обновляется автоматически** при каждом `make city-sverk` — скрипт
+копирует `agent/`, `souls/`, `test_fixtures/` через rsync перед запуском.
+
 Скрипт `city_sverk.sh` делает:
-1. Проверяет SSH-доступ ко всем дронам
-2. Копирует код (`agent/`, `souls/`, `test_fixtures/`) на каждый дрон через rsync
+1. Проверяет SSH-доступ ко всем дронам — недоступные пропускает
+2. Копирует код на каждый дрон через rsync
 3. Запускает `agent/loop.py` на каждом дроне (nohup, логи в `/tmp/drone-agent-*.log`)
 4. Поднимает coordinator + hub + rover в Docker локально
 
@@ -111,10 +119,10 @@ make city-sverk
 make down                             # coordinator + hub + rover (локально)
 
 # На каждом дроне:
-ssh pi@192.168.1.10 "pkill -f 'agent/loop.py'"
-ssh pi@192.168.1.11 "pkill -f 'agent/loop.py'"
-ssh pi@192.168.1.12 "pkill -f 'agent/loop.py'"
-ssh pi@192.168.1.13 "pkill -f 'agent/loop.py'"
+ssh sverk@192.168.1.10 "pkill -f 'agent/loop.py'"
+ssh sverk@192.168.1.11 "pkill -f 'agent/loop.py'"
+ssh sverk@192.168.1.12 "pkill -f 'agent/loop.py'"
+ssh sverk@192.168.1.13 "pkill -f 'agent/loop.py'"
 ```
 
 ### Результаты миссии

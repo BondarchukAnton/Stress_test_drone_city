@@ -1,61 +1,166 @@
-# Stress Test Drone City
+<div align="center">
 
-Мультиагентная система: дроны ищут пожар, ровер тушит.
+# 🏙️ Социум: Город Дронов
+
+### Мультиагентная система управления автономными БВС и роверами
+**Проект команды «БВС Стресс-тест» для соревнований «Архипелаг 2026» (Платформа «СВЕРХ»)**
+
+![Архипелаг 2026](https://img.shields.io/badge/Архипелаг-2026-blue?style=for-the-badge)
+![Платформа СВЕРХ](https://img.shields.io/badge/Платформа-СВЕРХ-orange?style=for-the-badge)
+![Команда](https://img.shields.io/badge/Команда-БВС__Стресс--тест-red?style=for-the-badge)
+![Python](https://img.shields.io/badge/Python-3.10+-3776AB?style=for-the-badge&logo=python&logoColor=white)
+![Docker](https://img.shields.io/badge/Docker-SITL-2496ED?style=for-the-badge&logo=docker&logoColor=white)
+![ROS 2](https://img.shields.io/badge/ROS_2-Humble-22314E?style=for-the-badge&logo=ros)
+![PX4](https://img.shields.io/badge/PX4-Autopilot-0B2C4A?style=for-the-badge&logo=px4)
+
+</div>
+
+---
+
+## 📌 О проекте
+
+**«Социум: Город Дронов»** — программный комплекс для управления автономным роем
+беспилотных воздушных судов (БВС) и наземной колёсной платформы (ровера).
+Проект построен на принципах мультиагентного взаимодействия: каждая единица техники
+действует как независимый ИИ-агент со своей ролью, задачами и моделью принятия решений.
+
+Система разработана для выполнения комплексных задач в условиях динамической городской среды:
+
+- **Разведка и картографирование** — дроны обследуют поле 6×6 клеток с помощью ArUco-локализации
+- **Коллективное принятие решений** — агенты обсуждают план через LLM-чат и голосуют
+- **Поиск целевых объектов** — VLM-анализ аэроснимков (gemma4-vlm) + fallback CV-детектор
+- **Совместная работа** — ровер получает координаты от дронов и выполняет наземную операцию
+- **Отказоустойчивость** — отказ любого компонента не роняет миссию
+
+### Сквозной пайплайн (одна команда — полный цикл)
+
+```
+[STAGE 1/4] CHAT_SCRIPT    — агенты обсуждают observer vs seeker, голосуют
+[STAGE 2/4] EXECUTE_FLIGHT — дроны взлетают, ArUco-локализуются, снимают, VLM-анализ
+[STAGE 3/4] CHAT_TARGET    — результаты VLM в чате, коллективный выбор цели
+[STAGE 4/4] ROVER_EXECUTE  — ровер: старт → башня (LED+3с) → огонь → старт
+```
+
+---
+
+## 🛠 Архитектурный стек
+
+| Компонент | Технологии | Назначение |
+| :--- | :--- | :--- |
+| **Agent Core** | Python, LLM API (gemma4-vlm) | Мозг системы: роли, контекст, принятие решений |
+| **Onboard** | Python, sverk_interfaces, PX4 | Бортовой софт БВС для связи с автопилотом |
+| **Bridge / Hub** | Python, HTTP, SSE, Docker | Шлюзы связи, чёрная доска (Blackboard), дэшборд |
+| **Simulation** | Docker, Gazebo Harmonic, PX4 SITL | Эмуляция полётных зон и виртуального города |
+| **Deploy** | Bash, rsync, Docker Compose | Автоматизированное развёртывание на флот аппаратов |
+
+---
+
+## 🗂 Структура репозитория
+
+```text
+├── agent/                     # Мультиагентное ядро системы
+│   ├── loop.py                # Главный цикл агента (polling blackboard)
+│   ├── brain.py               # LLM + VLM клиент (gemma4-vlm)
+│   ├── bb.py                  # Чёрная доска (FileBoard / HttpBoard)
+│   ├── drone_api.py           # Единый интерфейс управления дроном (sverk_interfaces)
+│   ├── observer.py            # Скрипт облёта: наблюдатель (ArUco home_cell)
+│   ├── seeker.py              # Скрипт облёта: ищейка (обход 3×3 по спирали)
+│   ├── rover_executor.py      # Управление ровером: башня → огонь → старт
+│   ├── fallback_cv.py         # Локальный CV-детектор при сбое VLM
+│   ├── mission_journal.py     # JSONL-журнал миссии (решение → команда → действие)
+│   └── roles/
+│       ├── coordinator.py     # Фазовая машина
+│       ├── city_missions.py   # Фазы: CHAT → FLIGHT → TARGET → ROVER → DONE
+│       ├── scout.py, rover.py # Базовые роли
+│       └── phase_util.py      # Дедлайны, переходы
+├── souls/                     # Промпты и «личности» агентов
+│   ├── coordinator.md         # Keystone — координатор
+│   ├── drone-1..4.md          # Magpie, Swift, Kestrel, Harrier — дроны
+│   └── rover.md               # Badger — ровер
+├── bridge/                    # HTTP-мост для ровера (mock.py)
+├── hub/                       # Дэшборд + SSE-стрим событий
+│   ├── server.py              # HTTP-сервер (HUB_MODE=1)
+│   └── static/index.html      # Дэшборд (чат, карточки агентов, лента событий)
+├── test_fixtures/city-1/      # Цифровой двойник полигона
+│   └── map.json               # Сетка 6×6, водонапорная башня, пожар
+├── .env                       # Конфигурация (LLM-ключи, параметры поля)
+├── .env.sverk                  # IP дронов и ровера (режим реальных дронов)
+├── city_sverk.sh              # Деплой на реальные дроны + запуск coordinator/hub
+├── city_sverk_sim.sh          # Запуск в симуляторе
+├── Guide.md                   # Подробная инструкция по запуску
+├── Makefile                   # make city-sverk / make city-sverk-sim
+├── docker-compose.yml         # Базовый Docker Compose
+├── docker-compose.city.yml    # Оверлей: city_missions
+├── docker-compose.egress.yml  # Оверлей: выход в интернет (LLM API)
+└── docker-compose.sverk-sim.yml # Оверлей: симулятор
+```
+
+---
+
+## 🚀 Быстрый старт
+
+### 1. Клонирование и подготовка
 
 ```bash
-make city-sverk-sim    # симулятор (4 дрона + ровер в Gazebo)
-make city-sverk        # реальные дроны (Raspberry Pi)
+git clone https://github.com/bondarchukanton/stress_test_drone_city.git
+cd stress_test_drone_city
+cp .env.sverk.example .env.sverk
+# Отредактировать .env.sverk — указать IP дронов и ровера
 ```
 
-**Подробная инструкция по запуску и переключению между режимами:** [`Guide.md`](Guide.md)
-
-## Управление дронами — только sverk_interfaces
-
-Дроны управляются строго через `sverk_interfaces` (ROS2 + ArUco).
-Если библиотека недоступна — логируется предупреждение, агент работает в режиме VLM-only.
-
-## Сквозной пайплайн
-
-```
-[STAGE 1/4] Agents debating flight script (observer vs seeker)...
-[STAGE 2/4] drone-1: executing flight script observer.py...
-[STAGE 3/4] Agents selecting target cell from VLM results...
-[STAGE 4/4] Rover executing firefighting loop...
-[FINISHED] Mission completed!
-```
-
-## Быстрый старт
+### 2. Запуск с реальными дронами
 
 ```bash
-# Симулятор (нужен pip3 install sverk_interfaces Pillow + ROS2 Humble)
-make city-sverk-sim
+# Полная очистка предыдущей попытки
+make clean
 
-# Реальные дроны (нужен .env.sverk с IP дронов)
+# Запуск (деплой на дроны + coordinator + хаб)
 make city-sverk
-
-# Остановка
-make down
 ```
 
-## Структура проекта
+Дэшборд: **http://localhost:8095**
 
-```
-agent/
-├── loop.py               # главный цикл агента
-├── brain.py              # LLM + VLM клиент
-├── drone_api.py          # sverk_interfaces (единственный способ управления)
-├── observer.py           # облёт (наблюдатель, ArUco home_cell)
-├── seeker.py             # облёт (ищейка, 3×3 по спирали)
-├── rover_executor.py     # ровер (башня → огонь → старт)
-├── fallback_cv.py        # CV-детектор при сбое VLM
-├── mission_journal.py    # JSONL-журнал миссии
-└── roles/
-    └── city_missions.py  # фазы: CHAT_SCRIPT → FLIGHT → CHAT_TARGET → ROVER → DONE
+### 3. Запуск в симуляторе
 
-Guide.md                  # подробная инструкция по запуску
-Makefile                  # city-sverk / city-sverk-sim
-city_sverk_sim.sh         # запуск drone-агентов на хосте (симулятор)
-city_sverk.sh             # деплой на реальные дроны
-.env                      # конфигурация (симулятор по умолчанию)
-.env.sverk                # конфигурация реальных дронов
+```bash
+make city-sverk-sim
 ```
+
+Подробнее: [`Guide.md`](Guide.md)
+
+---
+
+## 🤖 Роли агентов
+
+Агенты загружаются из `souls/` и действуют как независимые ИИ-личности:
+
+| Агент | Роль | Приоритеты |
+| :--- | :--- | :--- |
+| **Keystone** | Координатор | Ведёт фазовую машину, фиксирует консенсус |
+| **Magpie** | Дрон-разведчик №1 | Экономия батареи, observer-режим |
+| **Swift** | Дрон-разведчик №2 | Скорость, эффективные облёты |
+| **Kestrel** | Дрон-разведчик №3 | Детализация, анализ VLM-данных |
+| **Harrier** | Дрон-разведчик №4 | Покрытие пересечений, подтверждение находок |
+| **Badger** | Наземный ровер | Маршрут старт → башня → огонь → старт |
+
+### Особенности агентов
+
+- **Коллективное обсуждение** — агенты обсуждают план через LLM-чат (gemma4-vlm), аргументируют и голосуют
+- **Дедлайн-принятие решений** — через 120 секунд обсуждение прерывается, вердикт на основе сказанного
+- **Изоляция ошибок** — отказ одного дрона не останавливает миссию
+- **Динамическая ArUco-локализация** — дрон сам определяет свою клетку после взлёта
+- **VLM + fallback CV** — при сбое VLM включается локальный цветовой детектор
+
+---
+
+## 👥 Команда проекта
+
+**БВС Стресс-тест** — разработка и отладка алгоритмов группового применения БВС
+в рамках соревнований «Архипелаг 2026».
+
+---
+
+## 📄 Лицензия
+
+Проект распространяется под внутренними условиями участия в соревнованиях
+«Архипелаг 2026» на платформе «СВЕРХ».

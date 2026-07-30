@@ -17,7 +17,7 @@ services:
     environment:
       TASK: city_missions
       SCENARIO: city-1
-      SCOUTS: drone-1,drone-2,drone-3,drone-4
+      SCOUTS: "${SCOUTS:-drone-1,drone-2,drone-3,drone-4}"
       ROVER_URL: "${ROVER_URL:-}"
       ROVER_API_URL: "${ROVER_API_URL:-}"
       KEEP_ALIVE: "1"
@@ -53,3 +53,4 @@ services:
     environment:
       SCENARIO: city-1
       TASK: city_missions
+      HUB_MODE: "1"

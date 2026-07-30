@@ -2,11 +2,12 @@
 #
 # make city-sverk        — реальные дроны (sverk_interfaces)
 # make city-sverk-sim    — симулятор (drone-агенты на хосте)
-# make down              — остановить
+# make clean             — полная очистка перед новым запуском
+# make down              — остановить Docker-контейнеры
 # make reset             — сбросить blackboard
 # make logs              — логи
 
-.PHONY: city-sverk city-sverk-sim down reset logs help
+.PHONY: city-sverk city-sverk-sim clean down reset logs help
 
 city-sverk:
 	@test -f .env.sverk || { echo "-> Создай .env.sverk из .env.sverk.example"; exit 1; }
@@ -15,10 +16,23 @@ city-sverk:
 city-sverk-sim:
 	./city_sverk_sim.sh
 
+clean:
+	@echo "=== Остановка Docker ==="
+	docker compose -f docker-compose.yml -f docker-compose.city.yml \
+	                -f docker-compose.egress.yml down --remove-orphans -v 2>/dev/null || true
+	@echo "=== Остановка агентов на дронах ==="
+	@for ip in $(shell grep DRONE._HOST .env.sverk 2>/dev/null | cut -d= -f2); do \
+		user=$(shell grep DRONE_USER .env.sverk 2>/dev/null | cut -d= -f2); \
+		echo "  $$user@$$ip"; \
+		ssh -o ConnectTimeout=3 -n $$user@$$ip "pkill -f 'agent/loop.py'" 2>/dev/null || true; \
+	done
+	@echo "=== Очистка blackboard ==="
+	rm -rf blackboard/
+	@echo "Готово. Теперь: make city-sverk"
+
 down:
 	-docker compose -f docker-compose.yml -f docker-compose.city.yml \
-	                -f docker-compose.egress.yml \
-	                -f docker-compose.sverk-sim.yml down --remove-orphans 2>/dev/null
+	                -f docker-compose.egress.yml down --remove-orphans 2>/dev/null
 	pkill -f 'agent/loop.py' 2>/dev/null || true
 
 reset:
@@ -29,8 +43,7 @@ logs:
 	@echo "=== Drone-1 ===" && tail -20 /tmp/drone-agent-drone-1.log 2>/dev/null || echo "(нет лога)"
 
 help:
-	@echo "make city-sverk        — реальные дроны через sverk_interfaces"
-	@echo "make city-sverk-sim    — симулятор (drone-агенты на хосте)"
-	@echo "make down              — остановить всё"
-	@echo "make reset             — сбросить blackboard"
+	@echo "make clean             — полная очистка (остановка всего + сброс)"
+	@echo "make city-sverk        — реальные дроны"
+	@echo "make city-sverk-sim    — симулятор"
 	@echo "make logs              — логи"

@@ -185,7 +185,7 @@ class Handler(BaseHTTPRequestHandler):
             return self._send(200, "text/html",
                 b"<!doctype html><meta charset=utf-8>"
                 b"<body style='font:16px sans-serif;background:#0b0f16;color:#eee;padding:40px'>"
-                b"<h2>Stress Test Drone City — Hub</h2>"
+                b"<h2>Stress Test Drone City -- Hub</h2>"
                 b"<p>Dashboard not built. Check <code>hub/static/</code>.</p></body>")
         rel = path.lstrip("/")
         if rel and not path.endswith("/"):

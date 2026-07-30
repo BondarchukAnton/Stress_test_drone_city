@@ -103,7 +103,7 @@ def build_config() -> dict:
             "floor": int(os.environ.get("DEADLINE_FLOOR", "60")),
             "vote": int(os.environ.get("DEADLINE_VOTE", "90")),
             # studio decentralized chat (free stigmergic discussion before the vote)
-            "chat": int(os.environ.get("DEADLINE_CHAT", "180")),
+            "chat": int(os.environ.get("DEADLINE_CHAT", "60")),
         },
     }
 
