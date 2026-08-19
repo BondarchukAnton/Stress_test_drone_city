@@ -1,29 +1,43 @@
-# Ignore VSCode files
-.vscode/
-
-# Ignore Python cache files
+```
+# Python
 __pycache__/
 *.pyc
+*.pyo
+*.pyd
 
-# Ignore build and distribution files
-build/
+# Dependencies
+.venv/
+venv/
+env/
+node_modules/
+
+# Build artifacts
 dist/
+build/
+target/
 *.egg-info/
 
-# Ignore log files
+# Logs
 *.log
 
-# Ignore .env files (but keep .example templates)
-.env*
-!.env.*.example
+# Environment
+.env
+.env.local
+*.env.*
+
+# Editor/IDE
+.vscode/
+.idea/
+*.swp
+*.swo
 *.tmp
 
-# Ignore runtime blackboard
-blackboard/
+# Coverage
+.coverage
+coverage/
+htmlcov/
 
-# Ignore aider input history
-.aider.input.history
-
-# Ignore all .aider files
-.aider/*
-.aider*
+# Testing
+.pytest_cache/
+.mypy_cache/
+```
